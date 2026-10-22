@@ -3,24 +3,24 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   PhArrowUpRight as ArrowUpRight,
   PhCaretDown as CaretDown,
-  PhCheck as Check,
   PhCheckCircle as CheckCircle,
   PhDownloadSimple as DownloadSimple,
   PhGithubLogo as GithubLogo,
   PhInfo as Info,
   PhLockSimple as LockSimple,
-  PhUploadSimple as UploadSimple,
   PhWarningCircle as WarningCircle,
   PhX as X,
 } from '@phosphor-icons/vue'
 import CropStage from './components/CropStage.vue'
+import ImageLibrary from './components/ImageLibrary.vue'
 import SpecDialog from './components/SpecDialog.vue'
-import { locale, setLocale, t } from './lib/i18n'
 import {
   DEFAULT_TARGET_INDEX,
   MAX_FILE_BYTES,
+  MAX_IMAGES,
   TARGETS,
 } from './lib/constants'
+import { locale, setLocale, t } from './lib/i18n'
 import {
   assertSourceDimensions,
   detectTransparency,
@@ -33,44 +33,40 @@ import {
   validateFile,
 } from './lib/image'
 
-const fileInput = ref(null)
 const stageRef = ref(null)
 const specRef = ref(null)
 
-const image = ref(null)
+const images = ref([])
+const activeId = ref(null)
 const targetIndex = ref(DEFAULT_TARGET_INDEX)
 const format = ref('jpeg')
-const validationError = ref(null)
-const isLoadingFile = ref(false)
+const importErrors = ref([])
+const isLoadingFiles = ref(false)
 const isExporting = ref(false)
 const cropReady = ref(false)
 const cropMetrics = ref(null)
-const isDropActive = ref(false)
 const toast = ref(null)
 const lastExport = ref(null)
 
-let requestVersion = 0
-let dropDepth = 0
+let nextImageId = 1
+let nextErrorId = 1
+let importToken = 0
 let toastTimer = 0
 
-const target = computed(() => TARGETS[targetIndex.value])
-const canExport = computed(
-  () => Boolean(image.value) && cropReady.value && !isExporting.value && !isLoadingFile.value,
+const activeImage = computed(
+  () => images.value.find((item) => item.id === activeId.value) ?? null,
 )
-
-const validationErrorText = computed(() => {
-  if (!validationError.value) return ''
-  return t(validationError.value.key, validationError.value.params)
-})
-
-const sourceSummary = computed(() => {
-  if (!image.value) return ''
-  return t('app.fileSummary', {
-    width: formatPixels(image.value.width),
-    height: formatPixels(image.value.height),
-    size: formatBytes(image.value.size),
-  })
-})
+const target = computed(() => TARGETS[targetIndex.value])
+const isLocked = computed(
+  () => isLoadingFiles.value || isExporting.value,
+)
+const canExport = computed(
+  () =>
+    Boolean(activeImage.value) &&
+    cropReady.value &&
+    !isExporting.value &&
+    !isLoadingFiles.value,
+)
 
 const upscaleWarning = computed(() => {
   if (!cropMetrics.value) return ''
@@ -93,7 +89,7 @@ const exportFootnote = computed(() => {
       size: formatBytes(lastExport.value.size),
     })
   }
-  if (!image.value) return t('app.exportFootIdle')
+  if (!activeImage.value) return t('app.exportFootIdle')
   if (!cropReady.value) return t('app.exportFootPreparing')
   if (format.value === 'jpeg') return t('app.exportFootJpeg')
   return t('app.exportFootPng')
@@ -101,23 +97,12 @@ const exportFootnote = computed(() => {
 
 const exportButtonLabel = computed(() => {
   if (isExporting.value) return t('app.exporting')
-  if (!image.value) return t('app.export')
+  if (!activeImage.value) return t('app.export')
   if (!cropReady.value) return t('app.preparing')
   return t('app.export')
 })
 
 const toastRole = computed(() => (toast.value?.tone === 'error' ? 'alert' : 'status'))
-
-function openFilePicker() {
-  if (isLoadingFile.value) return
-  fileInput.value?.click()
-}
-
-function onFileInput(event) {
-  const file = event.target.files?.[0]
-  event.target.value = ''
-  if (file) handleFile(file)
-}
 
 function showToast({ title, detail, tone = 'success' }) {
   window.clearTimeout(toastTimer)
@@ -140,91 +125,147 @@ function revokeLater(url) {
   window.setTimeout(() => URL.revokeObjectURL(url), 400)
 }
 
-async function handleFile(file) {
-  if (!file || isExporting.value) return
+function resetImportErrors() {
+  importErrors.value = []
+}
 
-  const version = ++requestVersion
-  validationError.value = null
-  isLoadingFile.value = true
-  let objectUrl = ''
-
-  try {
-    await validateFile(file)
-    if (version !== requestVersion) return
-
-    objectUrl = URL.createObjectURL(file)
-    const decoded = await loadImage(objectUrl)
-    if (version !== requestVersion) return
-
-    assertSourceDimensions(decoded.naturalWidth, decoded.naturalHeight)
-    const transparency = await detectTransparency(decoded)
-    if (version !== requestVersion) return
-
-    const previous = image.value
-    image.value = {
-      name: file.name || 'screenshot',
-      mime: file.type,
-      size: file.size,
-      width: decoded.naturalWidth,
-      height: decoded.naturalHeight,
-      url: objectUrl,
-      transparent: transparency.transparent,
-      scanSampled: transparency.sampled,
-    }
-    objectUrl = ''
-    cropMetrics.value = null
-    cropReady.value = false
-    lastExport.value = null
-
-    if (previous) revokeLater(previous.url)
-
-    await nextTick()
-    if (window.matchMedia('(max-width: 920px)').matches) {
-      stageRef.value?.$el?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      })
-    }
-  } catch (error) {
-    if (objectUrl) URL.revokeObjectURL(objectUrl)
-    if (version !== requestVersion) return
-    validationError.value = error?.i18nKey
-      ? { key: error.i18nKey, params: error.i18nParams }
-      : { key: 'errors.readFailed' }
-  } finally {
-    if (version === requestVersion) isLoadingFile.value = false
+function fileImportError(file, error) {
+  return {
+    id: `import-error-${nextErrorId++}`,
+    name: file?.name || '',
+    key: error?.i18nKey || 'errors.readFailed',
+    params: error?.i18nParams || {},
   }
 }
 
-function clearImage() {
-  if (isExporting.value) return
-  requestVersion += 1
-  const previous = image.value
-  image.value = null
+async function handleFiles(files) {
+  if (isLoadingFiles.value || isExporting.value) return
+
+  const selectedFiles = Array.from(files || []).filter(
+    (file) => file instanceof File,
+  )
+  if (!selectedFiles.length) return
+
+  resetImportErrors()
+
+  const slots = Math.max(0, MAX_IMAGES - images.value.length)
+  if (slots === 0) {
+    importErrors.value = [
+      {
+        id: `import-error-${nextErrorId++}`,
+        name: '',
+        key: 'errors.listFull',
+        params: { max: MAX_IMAGES },
+      },
+    ]
+    showToast({
+      title: t('toast.importFailed'),
+      detail: t('errors.listFull', { max: MAX_IMAGES }),
+      tone: 'error',
+    })
+    return
+  }
+
+  const acceptedFiles = selectedFiles.slice(0, slots)
+  const errors = []
+
+  if (selectedFiles.length > acceptedFiles.length) {
+    errors.push({
+      id: `import-error-${nextErrorId++}`,
+      name: '',
+      key: 'errors.batchLimit',
+      params: { max: MAX_IMAGES, count: acceptedFiles.length },
+    })
+  }
+
+  const token = ++importToken
+  isLoadingFiles.value = true
+
+  try {
+    const nextImages = []
+
+    for (const file of acceptedFiles) {
+      let objectUrl = ''
+
+      try {
+        await validateFile(file)
+        objectUrl = URL.createObjectURL(file)
+        const decoded = await loadImage(objectUrl)
+        assertSourceDimensions(decoded.naturalWidth, decoded.naturalHeight)
+        const transparency = await detectTransparency(decoded)
+
+        nextImages.push({
+          id: `image-${nextImageId++}`,
+          name: file.name || 'screenshot',
+          mime: file.type,
+          size: file.size,
+          width: decoded.naturalWidth,
+          height: decoded.naturalHeight,
+          url: objectUrl,
+          transparent: transparency.transparent,
+          scanSampled: transparency.sampled,
+        })
+        objectUrl = ''
+      } catch (error) {
+        if (objectUrl) URL.revokeObjectURL(objectUrl)
+        errors.push(fileImportError(file, error))
+      }
+    }
+
+    if (token !== importToken) {
+      nextImages.forEach((item) => URL.revokeObjectURL(item.url))
+      return
+    }
+
+    if (nextImages.length) {
+      images.value = [...images.value, ...nextImages]
+      activeId.value = nextImages[0].id
+      cropMetrics.value = null
+      cropReady.value = false
+      lastExport.value = null
+    }
+
+    importErrors.value = errors
+
+    if (errors.length) {
+      showToast({
+        title: nextImages.length
+          ? t('toast.importPartial')
+          : t('toast.importFailed'),
+        detail: t('library.errorsTitle', { count: errors.length }),
+        tone: nextImages.length ? 'warning' : 'error',
+      })
+    }
+  } finally {
+    if (token === importToken) isLoadingFiles.value = false
+  }
+}
+
+function selectImage(id) {
+  if (isLocked.value || id === activeId.value) return
+  if (!images.value.some((item) => item.id === id)) return
+
+  activeId.value = id
   cropMetrics.value = null
   cropReady.value = false
-  validationError.value = null
   lastExport.value = null
-  if (previous) revokeLater(previous.url)
 }
 
-function onDragEnter(event) {
-  const types = Array.from(event.dataTransfer?.types ?? [])
-  if (!types.includes('Files')) return
-  dropDepth += 1
-  isDropActive.value = true
-}
+function removeImage(id) {
+  if (isLocked.value) return
 
-function onDragLeave() {
-  dropDepth = Math.max(0, dropDepth - 1)
-  if (dropDepth === 0) isDropActive.value = false
-}
+  const index = images.value.findIndex((item) => item.id === id)
+  if (index < 0) return
 
-function onDrop(event) {
-  dropDepth = 0
-  isDropActive.value = false
-  const file = event.dataTransfer?.files?.[0]
-  if (file) handleFile(file)
+  const [removed] = images.value.splice(index, 1)
+  if (activeId.value === id) {
+    const next = images.value[index] || images.value[index - 1] || null
+    activeId.value = next?.id ?? null
+    cropMetrics.value = null
+    cropReady.value = false
+    lastExport.value = null
+  }
+  revokeLater(removed.url)
 }
 
 function onCropChange(nextMetrics) {
@@ -307,14 +348,18 @@ watch([targetIndex, format], () => {
   lastExport.value = null
 })
 
+watch(activeId, () => {
+  lastExport.value = null
+})
+
 watch(locale, () => {
   dismissToast()
 })
 
 onBeforeUnmount(() => {
-  requestVersion += 1
+  importToken += 1
   window.clearTimeout(toastTimer)
-  if (image.value) URL.revokeObjectURL(image.value.url)
+  images.value.forEach((item) => URL.revokeObjectURL(item.url))
 })
 </script>
 
@@ -400,90 +445,25 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="control-stack">
-          <section class="control-step" aria-labelledby="step-import">
+          <section class="control-step" aria-labelledby="step-library">
             <div class="step-head">
               <span class="step-index">01</span>
-              <h2 id="step-import">{{ t('app.stepImport') }}</h2>
-              <span class="step-note">≤ 5 MB</span>
+              <h2 id="step-library">{{ t('library.title') }}</h2>
+              <span class="step-note">
+                {{ isLoadingFiles ? t('library.importing') : `${images.length} / ${MAX_IMAGES}` }}
+              </span>
             </div>
 
-            <input
-              ref="fileInput"
-              class="visually-hidden"
-              type="file"
-              accept="image/jpeg,image/png,.jpg,.jpeg,.png"
-              :aria-label="t('app.fileInputAria')"
-              tabindex="-1"
-              @change="onFileInput"
+            <ImageLibrary
+              :images="images"
+              :active-id="activeId"
+              :disabled="isLocked"
+              @select="selectImage"
+              @remove="removeImage"
             />
 
-            <button
-              v-if="!image"
-              class="dropzone"
-              :class="{ 'is-active': isDropActive, 'is-loading': isLoadingFile }"
-              type="button"
-              :disabled="isLoadingFile"
-              @click="openFilePicker"
-              @dragenter.prevent="onDragEnter"
-              @dragover.prevent
-              @dragleave.prevent="onDragLeave"
-              @drop.prevent="onDrop"
-            >
-              <span class="upload-mark" aria-hidden="true">
-                <UploadSimple :size="18" weight="light" />
-              </span>
-              <span class="drop-copy">
-                <strong>{{ isLoadingFile ? t('app.dropChecking') : t('app.dropTitle') }}</strong>
-                <small>{{ t('app.dropMeta') }}</small>
-              </span>
-              <span class="browse-label">{{ isLoadingFile ? t('app.checking') : t('app.browse') }}</span>
-            </button>
-
-            <div v-else class="file-card">
-              <span class="file-thumb">
-                <img :src="image.url" alt="" />
-              </span>
-              <span class="file-copy">
-                <strong :title="image.name">{{ image.name }}</strong>
-                <small>{{ sourceSummary }}</small>
-              </span>
-              <button
-                class="file-remove"
-                type="button"
-                :aria-label="t('app.removeAria')"
-                :title="t('app.removeAria')"
-                @click="clearImage"
-              >
-                <X :size="14" weight="bold" aria-hidden="true" />
-              </button>
-            </div>
-
-            <div v-if="image" class="file-actions">
-              <button class="text-button" type="button" @click="openFilePicker">
-                {{ t('app.replace') }}
-              </button>
-              <span
-                class="scan-state"
-                :class="image.transparent ? 'scan-state--warn' : 'scan-state--ok'"
-              >
-                <WarningCircle
-                  v-if="image.transparent"
-                  :size="12"
-                  weight="bold"
-                  aria-hidden="true"
-                />
-                <Check
-                  v-else
-                  :size="12"
-                  weight="bold"
-                  aria-hidden="true"
-                />
-                {{ image.transparent ? t('app.scanTransparent') : t('app.scanOpaque') }}
-              </span>
-            </div>
-
             <p
-              v-if="image?.transparent"
+              v-if="activeImage?.transparent"
               class="inline-notice inline-notice--warn"
               role="status"
             >
@@ -491,14 +471,24 @@ onBeforeUnmount(() => {
               {{ t('app.transparencyNotice') }}
             </p>
 
-            <p
-              v-if="validationError"
-              class="inline-notice inline-notice--error"
+            <div
+              v-if="importErrors.length"
+              class="inline-notice inline-notice--error import-errors"
               role="alert"
             >
               <WarningCircle :size="14" weight="bold" aria-hidden="true" />
-              {{ validationErrorText }}
-            </p>
+              <div class="import-errors-copy">
+                <p class="import-errors-title">
+                  {{ t('library.errorsTitle', { count: importErrors.length }) }}
+                </p>
+                <ul class="import-errors-list">
+                  <li v-for="item in importErrors" :key="item.id">
+                    <strong v-if="item.name">{{ item.name }}</strong>
+                    <span>{{ t(item.key, item.params) }}</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
           </section>
 
           <section class="control-step" aria-labelledby="step-size">
@@ -609,11 +599,14 @@ onBeforeUnmount(() => {
 
       <CropStage
         ref="stageRef"
-        :image="image"
+        :image="activeImage"
         :target="target"
+        :image-count="images.length"
+        :max-images="MAX_IMAGES"
+        :is-busy="isLocked"
         @crop-change="onCropChange"
         @crop-error="onCropError"
-        @file-drop="handleFile"
+        @files-selected="handleFiles"
         @ready="onCropReady"
       />
     </main>
@@ -941,217 +934,6 @@ onBeforeUnmount(() => {
   letter-spacing: 0.05em;
 }
 
-.dropzone {
-  display: grid;
-  width: 100%;
-  min-height: 88px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.3);
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-control);
-  text-align: left;
-  transition:
-    background 170ms ease,
-    border-color 170ms ease,
-    transform 170ms ease;
-}
-
-.dropzone:hover:not(:disabled),
-.dropzone.is-active {
-  background: rgba(255, 255, 255, 0.6);
-  border-color: var(--ink-soft);
-}
-
-.dropzone.is-active {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px rgba(255, 90, 47, 0.16);
-}
-
-.dropzone:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-.dropzone:disabled {
-  cursor: wait;
-  opacity: 0.7;
-}
-
-.upload-mark {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  color: var(--ink-soft);
-  background: rgba(25, 26, 23, 0.045);
-  border-radius: 9px;
-}
-
-.drop-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.drop-copy strong {
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 580;
-  letter-spacing: -0.015em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.drop-copy small {
-  color: var(--ink-faint);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.03em;
-}
-
-.browse-label {
-  padding: 4px 7px;
-  color: var(--ink-faint);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-}
-
-.file-card {
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 11px;
-  min-height: 62px;
-  padding: 7px 8px;
-  background: rgba(255, 255, 255, 0.56);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-}
-
-.file-thumb {
-  position: relative;
-  display: block;
-  width: 48px;
-  height: 46px;
-  overflow: hidden;
-  background-color: #dedbd2;
-  background-image:
-    linear-gradient(45deg, rgba(255, 255, 255, 0.5) 25%, transparent 25%),
-    linear-gradient(-45deg, rgba(255, 255, 255, 0.5) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.5) 75%),
-    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.5) 75%);
-  background-position:
-    0 0,
-    0 5px,
-    5px -5px,
-    -5px 0;
-  background-size: 10px 10px;
-  border-radius: 7px;
-}
-
-.file-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.file-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.file-copy strong {
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 11px;
-  font-weight: 590;
-  letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-copy small {
-  overflow: hidden;
-  color: var(--ink-faint);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.015em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-remove {
-  display: grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  color: var(--ink-faint);
-  background: transparent;
-  border-radius: 50%;
-  transition:
-    color 150ms ease,
-    background 150ms ease;
-}
-
-.file-remove:hover {
-  color: var(--ink);
-  background: var(--paper-deep);
-}
-
-.file-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 8px;
-  padding: 0 1px;
-}
-
-.text-button {
-  padding: 0;
-  color: var(--ink-soft);
-  font-size: 10px;
-  font-weight: 560;
-  background: transparent;
-  border-bottom: 1px solid var(--line-strong);
-  transition:
-    color 150ms ease,
-    border-color 150ms ease;
-}
-
-.text-button:hover {
-  color: var(--accent-strong);
-  border-color: var(--accent);
-}
-
-.scan-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-.scan-state--ok {
-  color: #46745d;
-}
-
-.scan-state--warn {
-  color: var(--warning);
-}
-
 .inline-notice {
   display: flex;
   align-items: flex-start;
@@ -1178,6 +960,43 @@ onBeforeUnmount(() => {
   color: #8d2d25;
   background: rgba(171, 54, 44, 0.07);
   border: 1px solid rgba(171, 54, 44, 0.17);
+}
+
+.import-errors {
+  align-items: flex-start;
+}
+
+.import-errors-copy {
+  min-width: 0;
+}
+
+.import-errors-title {
+  margin: 0 0 3px;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.import-errors-list {
+  max-height: 96px;
+  padding-left: 14px;
+  margin: 0;
+  overflow-y: auto;
+}
+
+.import-errors-list li {
+  margin: 2px 0;
+  font-size: 9px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.import-errors-list strong {
+  font-weight: 650;
+}
+
+.import-errors-list strong::after {
+  content: ': ';
 }
 
 .select-shell {
@@ -1742,11 +1561,11 @@ onBeforeUnmount(() => {
     animation: none;
   }
 
-  .dropzone,
   .format-card,
   .export-button,
   .spec-button,
-  .file-remove,
+  .repo-button,
+  .locale-option,
   .toast-enter-active,
   .toast-leave-active {
     transition: none;

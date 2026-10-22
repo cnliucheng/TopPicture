@@ -1,10 +1,10 @@
 <script setup>
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Cropper from 'cropperjs'
 import {
   PhArrowCounterClockwise as ArrowCounterClockwise,
-  PhFrameCorners as FrameCorners,
   PhLockSimple as LockSimple,
+  PhPlus as Plus,
   PhUploadSimple as UploadSimple,
 } from '@phosphor-icons/vue'
 import { CROP_RATIO } from '../lib/constants'
@@ -20,12 +20,24 @@ const props = defineProps({
     type: Object,
     required: true,
   },
+  imageCount: {
+    type: Number,
+    default: 0,
+  },
+  maxImages: {
+    type: Number,
+    default: 5,
+  },
+  isBusy: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits([
   'crop-change',
   'crop-error',
-  'file-drop',
+  'files-selected',
   'ready',
 ])
 
@@ -67,12 +79,18 @@ const CROPPER_TEMPLATE = `
   </cropper-canvas>
 `
 
+const fileInput = ref(null)
 const hostEl = ref(null)
 const sourceImage = ref(null)
 const isReady = ref(false)
 const initError = ref('')
 const dragging = ref(false)
 const metrics = ref(null)
+const canAdd = computed(
+  () => !props.isBusy && props.imageCount < props.maxImages,
+)
+const isFull = computed(() => props.imageCount >= props.maxImages)
+const cropStates = new Map()
 
 let cropper = null
 let selection = null
@@ -84,6 +102,7 @@ let clampScheduled = false
 let resizeTimer = 0
 let metricsTimer = 0
 let lastSurfaceSize = null
+let initToken = 0
 
 function emitReady(value) {
   isReady.value = value
@@ -116,6 +135,49 @@ function waitForImage(image) {
     image.addEventListener('load', onLoad)
     image.addEventListener('error', onError)
   }).then(() => image.decode?.().catch(() => {}))
+}
+
+function captureCropState(id) {
+  if (!id || !selection || !cropperImage || !canvas || !isReady.value) return
+  const canvasRect = canvas.getBoundingClientRect()
+  if (!canvasRect.width || !canvasRect.height) return
+
+  cropStates.set(id, {
+    transform: cropperImage.$getTransform(),
+    selection: {
+      x: selection.x,
+      y: selection.y,
+      width: selection.width,
+      height: selection.height,
+    },
+    canvasWidth: canvasRect.width,
+    canvasHeight: canvasRect.height,
+  })
+}
+
+function restoreCropState() {
+  if (!props.image || !cropperImage || !selection) return false
+  const saved = cropStates.get(props.image.id)
+  const canvasRect = canvas?.getBoundingClientRect()
+  if (!saved || !canvasRect) return false
+
+  if (
+    Math.abs(canvasRect.width - saved.canvasWidth) > 2 ||
+    Math.abs(canvasRect.height - saved.canvasHeight) > 2
+  ) {
+    return false
+  }
+
+  cropperImage.$setTransform(...saved.transform)
+  selection.$change(
+    saved.selection.x,
+    saved.selection.y,
+    saved.selection.width,
+    saved.selection.height,
+    CROP_RATIO,
+    true,
+  )
+  return true
 }
 
 function getImageBounds() {
@@ -285,6 +347,7 @@ function observeResize() {
     window.clearTimeout(resizeTimer)
     resizeTimer = window.setTimeout(async () => {
       if (!cropperImage || !isReady.value) return
+      cropStates.clear()
       cropperImage.$center('contain')
       await nextFrame()
       setInitialSelection()
@@ -323,7 +386,7 @@ async function initCropper() {
     await nextFrame()
     await nextFrame()
 
-    setInitialSelection()
+    if (!restoreCropState()) setInitialSelection()
     bindEvents()
     observeResize()
     updateMetrics()
@@ -336,9 +399,10 @@ async function initCropper() {
 }
 
 async function retryCrop() {
+  const token = ++initToken
   initError.value = ''
   await nextTick()
-  await initCropper()
+  await initCropper(token)
 }
 
 async function resetCrop() {
@@ -389,7 +453,19 @@ async function renderExport() {
   return exact
 }
 
+function openFilePicker() {
+  if (!canAdd.value) return
+  fileInput.value?.click()
+}
+
+function onFileInput(event) {
+  const files = Array.from(event.target.files ?? [])
+  event.target.value = ''
+  if (files.length) emit('files-selected', files)
+}
+
 function onDragEnter(event) {
+  if (props.isBusy) return
   const types = Array.from(event.dataTransfer?.types ?? [])
   if (!types.includes('Files')) return
   dragDepth += 1
@@ -404,23 +480,27 @@ function onDragLeave() {
 function onDrop(event) {
   dragDepth = 0
   dragging.value = false
-  const file = event.dataTransfer?.files?.[0]
-  if (file) emit('file-drop', file)
+  if (props.isBusy) return
+  const files = Array.from(event.dataTransfer?.files ?? [])
+  if (files.length) emit('files-selected', files)
 }
 
 watch(
-  () => props.image?.url,
-  async (url) => {
+  () => props.image,
+  async (nextImage, previousImage) => {
+    if (previousImage) captureCropState(previousImage.id)
+    const token = ++initToken
     cleanupCropper()
     initError.value = ''
-    if (!url) return
+    if (!nextImage) return
     await nextTick()
-    await initCropper()
+    await initCropper(token)
   },
   { flush: 'post' },
 )
 
 onBeforeUnmount(() => {
+  initToken += 1
   cleanupCropper()
 })
 
@@ -429,6 +509,17 @@ defineExpose({ renderExport, resetCrop })
 
 <template>
   <section class="stage-panel" aria-labelledby="stage-title">
+    <input
+      ref="fileInput"
+      class="visually-hidden"
+      type="file"
+      accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+      multiple
+      :disabled="!canAdd"
+      :aria-label="t('app.fileInputAria')"
+      @change="onFileInput"
+    />
+
     <header class="stage-head">
       <div class="stage-heading">
         <span class="stage-eyebrow">{{ t('stage.eyebrow') }}</span>
@@ -437,6 +528,19 @@ defineExpose({ renderExport, resetCrop })
 
       <div class="stage-actions">
         <span class="stage-hint">{{ t('stage.hint') }}</span>
+        <button
+          v-if="image"
+          class="stage-add-button"
+          type="button"
+          :disabled="!canAdd"
+          :title="isFull ? t('stage.limitTitle', { max: maxImages }) : t('stage.addImages')"
+          :aria-label="isFull ? t('stage.limitTitle', { max: maxImages }) : t('stage.addImages')"
+          @click="openFilePicker"
+        >
+          <Plus :size="13" weight="bold" aria-hidden="true" />
+          <span>{{ isFull ? t('stage.limitReached') : t('stage.addImages') }}</span>
+          <span class="stage-add-count">{{ imageCount }}/{{ maxImages }}</span>
+        </button>
         <span class="ratio-badge">
           <LockSimple :size="13" weight="bold" aria-hidden="true" />
           16:10
@@ -464,18 +568,27 @@ defineExpose({ renderExport, resetCrop })
         @dragleave.prevent="onDragLeave"
         @drop.prevent="onDrop"
       >
-        <div v-if="!image" class="stage-empty">
+        <button
+          v-if="!image"
+          class="stage-empty"
+          type="button"
+          :disabled="!canAdd"
+          @click="openFilePicker"
+        >
           <span class="corner-mark corner-mark--tl" aria-hidden="true"></span>
           <span class="corner-mark corner-mark--tr" aria-hidden="true"></span>
           <span class="corner-mark corner-mark--bl" aria-hidden="true"></span>
           <span class="corner-mark corner-mark--br" aria-hidden="true"></span>
 
           <span class="empty-icon">
-            <FrameCorners :size="26" weight="light" aria-hidden="true" />
+            <UploadSimple :size="26" weight="light" aria-hidden="true" />
           </span>
-          <span class="empty-title">{{ t('stage.readyTitle') }}</span>
-          <span class="empty-copy">{{ t('stage.readyCopy') }}</span>
-        </div>
+          <span class="empty-title">
+            {{ isBusy ? t('stage.importing') : t('stage.emptyTitle') }}
+          </span>
+          <span class="empty-copy">{{ t('stage.emptyCopy') }}</span>
+          <span class="empty-meta">{{ t('stage.emptyMeta', { max: maxImages }) }}</span>
+        </button>
 
         <div v-else ref="hostEl" class="cropper-host">
           <img
@@ -599,6 +712,45 @@ defineExpose({ renderExport, resetCrop })
   white-space: nowrap;
 }
 
+.stage-add-button {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: rgba(245, 243, 235, 0.78);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.stage-add-button:hover:not(:disabled) {
+  color: var(--paper);
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.stage-add-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.stage-add-count {
+  color: rgba(245, 243, 235, 0.4);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
 .ratio-badge {
   display: inline-flex;
   align-items: center;
@@ -679,6 +831,7 @@ defineExpose({ renderExport, resetCrop })
   position: relative;
   display: flex;
   width: 100%;
+  cursor: pointer;
   height: 100%;
   flex-direction: column;
   align-items: center;
@@ -690,6 +843,15 @@ defineExpose({ renderExport, resetCrop })
   border: 0;
   border-radius: inherit;
   text-align: center;
+  transition: background 180ms ease;
+}
+
+.stage-empty:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.stage-empty:disabled {
+  cursor: wait;
 }
 
 .stage-empty::before {
@@ -699,6 +861,11 @@ defineExpose({ renderExport, resetCrop })
   content: '';
   border: 1px dashed rgba(245, 243, 235, 0.17);
   border-radius: 5px;
+  transition: border-color 180ms ease;
+}
+
+.stage-empty:hover:not(:disabled)::before {
+  border-color: rgba(255, 90, 47, 0.55);
 }
 
 .empty-icon {
@@ -711,6 +878,16 @@ defineExpose({ renderExport, resetCrop })
   background: rgba(255, 255, 255, 0.055);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 50%;
+  transition:
+    color 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
+}
+
+.stage-empty:hover:not(:disabled) .empty-icon {
+  color: var(--accent);
+  border-color: rgba(255, 90, 47, 0.42);
+  transform: translateY(-2px);
 }
 
 .empty-title {
@@ -725,6 +902,14 @@ defineExpose({ renderExport, resetCrop })
   font-size: 10px;
   line-height: 1.55;
   letter-spacing: 0.01em;
+}
+
+.empty-meta {
+  margin-top: 2px;
+  color: rgba(245, 243, 235, 0.43);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.035em;
 }
 
 .corner-mark {
@@ -981,6 +1166,10 @@ defineExpose({ renderExport, resetCrop })
     min-height: 480px;
   }
 
+  .stage-hint {
+    display: none;
+  }
+
   .crop-surface {
     max-width: calc((100dvh - 280px) * 1.6);
   }
@@ -1027,6 +1216,16 @@ defineExpose({ renderExport, resetCrop })
     display: none;
   }
 
+  .stage-add-button {
+    width: 28px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .stage-add-button > span {
+    display: none;
+  }
+
   .stage-heading h2 {
     font-size: 13px;
   }
@@ -1039,6 +1238,10 @@ defineExpose({ renderExport, resetCrop })
     flex-wrap: wrap;
     justify-content: center;
     font-size: 9px;
+  }
+
+  .empty-meta {
+    font-size: 7.5px;
   }
 
   .stage-empty::before {
@@ -1056,6 +1259,10 @@ defineExpose({ renderExport, resetCrop })
 
 @media (prefers-reduced-motion: reduce) {
   .stage-icon-button,
+  .stage-add-button,
+  .stage-empty,
+  .stage-empty::before,
+  .empty-icon,
   .crop-surface {
     transition: none;
   }

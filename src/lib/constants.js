@@ -2,6 +2,7 @@ export const MAX_FILE_BYTES = 5 * 1024 * 1024
 export const MIN_SOURCE_WIDTH = 1280
 export const MIN_SOURCE_HEIGHT = 800
 export const CROP_RATIO = 16 / 10
+export const MAX_IMAGES = 5
 
 export const TARGETS = [
   { width: 1280, height: 800, label: '1280 × 800' },

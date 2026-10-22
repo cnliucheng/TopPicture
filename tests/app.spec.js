@@ -21,6 +21,40 @@ async function uploadFixture(page, name) {
   await expect(page.locator('.export-button')).toBeEnabled()
 }
 
+async function dropFixtures(page, names) {
+  const payload = await Promise.all(
+    names.map(async (name) => {
+      const data = await fs.readFile(fixture(name))
+      return {
+        name,
+        type: name.endsWith('.png') ? 'image/png' : 'image/jpeg',
+        data: data.toString('base64'),
+      }
+    }),
+  )
+
+  await page.evaluate((files) => {
+    const transfer = new DataTransfer()
+    for (const file of files) {
+      const bytes = Uint8Array.from(atob(file.data), (char) =>
+        char.charCodeAt(0),
+      )
+      transfer.items.add(new File([bytes], file.name, { type: file.type }))
+    }
+
+    const surface = document.querySelector('.crop-surface')
+    for (const type of ['dragenter', 'dragover', 'drop']) {
+      surface.dispatchEvent(
+        new DragEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: transfer,
+        }),
+      )
+    }
+  }, payload)
+}
+
 async function readDownload(download) {
   const downloadPath = await download.path()
   return fs.readFile(downloadPath)
@@ -131,7 +165,9 @@ test('acceptance 3: detects transparency and flattens it to opaque white PNG', a
 }) => {
   await uploadFixture(page, 'all-transparent.png')
 
-  await expect(page.locator('.scan-state')).toContainText('有透明像素')
+  await expect(
+    page.locator('.thumb-card').first().locator('.alpha-dot'),
+  ).toBeVisible()
   await expect(page.locator('.inline-notice--warn').first()).toContainText(
     '检测到透明区域，导出时将自动填充为白色背景。',
   )
@@ -267,6 +303,168 @@ test('supports wheel zoom and resetting the crop view', async ({ page }) => {
     .toBeCloseTo(initialScale, 2)
 })
 
+test('uses the canvas empty state and add button as the only upload entry', async ({
+  page,
+}) => {
+  await expect(page.locator('.stage-empty')).toBeVisible()
+
+  const firstChooser = page.waitForEvent('filechooser')
+  await page.locator('.stage-empty').click()
+  const first = await firstChooser
+  await first.setFiles(fixture('app-screenshot.jpg'))
+
+  await expect(page.locator('.thumb-card')).toHaveCount(1)
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+
+  const secondChooser = page.waitForEvent('filechooser')
+  await page.locator('.stage-add-button').click()
+  const second = await secondChooser
+  await second.setFiles(fixture('transparent-screenshot.png'))
+
+  await expect(page.locator('.thumb-card')).toHaveCount(2)
+  await expect(page.locator('.thumb-card').nth(1)).toHaveClass(/is-active/)
+})
+
+test('imports multiple images and preserves each crop view', async ({ page }) => {
+  await uploadFile(page, [
+    fixture('app-screenshot.jpg'),
+    fixture('transparent-screenshot.png'),
+  ])
+
+  await expect(page.locator('.thumb-card')).toHaveCount(2)
+  await expect(page.locator('.thumb-card').first()).toHaveClass(/is-active/)
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+  await expect(
+    page.locator('#step-library').locator('..').locator('.step-note'),
+  ).toHaveText('2 / 5')
+
+  const initialScale = await page.evaluate(
+    () => document.querySelector('cropper-image').$getTransform()[0],
+  )
+
+  await page.mouse.move(900, 450)
+  await page.mouse.wheel(0, -240)
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () => document.querySelector('cropper-image').$getTransform()[0],
+      ),
+    )
+    .toBeGreaterThan(initialScale)
+
+  const zoomedScale = await page.evaluate(
+    () => document.querySelector('cropper-image').$getTransform()[0],
+  )
+
+  await page.locator('.thumb-card').nth(1).locator('.thumb-select').click()
+  await expect(page.locator('.thumb-card').nth(1)).toHaveClass(/is-active/)
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+
+  await page.locator('.thumb-card').first().locator('.thumb-select').click()
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () => document.querySelector('cropper-image').$getTransform()[0],
+      ),
+    )
+    .toBeCloseTo(zoomedScale, 4)
+
+  await page.locator('.thumb-card').first().locator('.thumb-remove').click()
+  await expect(page.locator('.thumb-card')).toHaveCount(1)
+  await expect(page.locator('.thumb-card').first()).toHaveClass(/is-active/)
+})
+
+test('keeps valid images when part of a batch fails validation', async ({
+  page,
+}) => {
+  await uploadFile(page, [
+    fixture('app-screenshot.jpg'),
+    fixture('low-resolution.png'),
+  ])
+
+  await expect(page.locator('.thumb-card')).toHaveCount(1)
+  await expect(page.locator('.thumb-name')).toHaveText('app-screenshot.jpg')
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+  await expect(page.locator('.import-errors')).toContainText(
+    '低于最低要求 1280 × 800',
+  )
+})
+
+test('caps the library at five images and reports extras', async ({ page }) => {
+  await uploadFile(page, [
+    fixture('app-screenshot.jpg'),
+    fixture('transparent-screenshot.png'),
+    fixture('all-transparent.png'),
+    fixture('app-screenshot.jpg'),
+    fixture('transparent-screenshot.png'),
+    fixture('all-transparent.png'),
+  ])
+
+  await expect(page.locator('.thumb-card')).toHaveCount(5)
+  await expect(
+    page.locator('#step-library').locator('..').locator('.step-note'),
+  ).toHaveText('5 / 5')
+  await expect(page.locator('.import-errors')).toContainText(
+    '最多保留 5 张截图',
+  )
+  await expect(page.locator('.stage-add-button')).toBeDisabled()
+  await expect(page.locator('.stage-add-button')).toContainText('已达上限')
+  await expect(page.locator('input[type=file]')).toBeDisabled()
+})
+
+test('imports multiple images by dropping them on the canvas', async ({
+  page,
+}) => {
+  await dropFixtures(page, [
+    'app-screenshot.jpg',
+    'transparent-screenshot.png',
+  ])
+
+  await expect(page.locator('.thumb-card')).toHaveCount(2)
+  await expect(page.locator('.thumb-card').first()).toHaveClass(/is-active/)
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+  await expect(page.locator('.thumb-name').nth(0)).toHaveText(
+    'app-screenshot.jpg',
+  )
+  await expect(page.locator('.thumb-name').nth(1)).toHaveText(
+    'transparent-screenshot.png',
+  )
+})
+
+test('exports only the active image in a multi-image library', async ({
+  page,
+}) => {
+  await uploadFile(page, [
+    fixture('app-screenshot.jpg'),
+    fixture('all-transparent.png'),
+  ])
+
+  await page.locator('.thumb-card').nth(1).locator('.thumb-select').click()
+  await expect(page.locator('.thumb-card').nth(1)).toHaveClass(/is-active/)
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+
+  await page.locator('input[type=radio][value=png]').check()
+  const downloadPromise = page.waitForEvent('download')
+  await page.locator('.export-button').click()
+  const download = await downloadPromise
+  const buffer = await readDownload(download)
+  const decoded = decode(buffer)
+
+  expect(download.suggestedFilename()).toBe('screenshot_1440x900.png')
+  expect(decoded.channels).toBe(3)
+  expect(decoded.data.every((value) => value === 255)).toBe(true)
+})
+
+test('keeps the import entry point on the canvas only', async ({ page }) => {
+  await expect(page.locator('.dropzone')).toHaveCount(0)
+  await expect(page.locator('.control-panel input[type=file]')).toHaveCount(0)
+  await expect(page.locator('.control-panel .stage-empty')).toHaveCount(0)
+  await expect(page.locator('.stage-empty')).toHaveCount(1)
+  await expect(page.locator('.stage-empty')).toBeVisible()
+  await expect(page.locator('input[type=file]')).toHaveCount(1)
+})
+
 test('switches between Chinese and English and persists the choice', async ({
   page,
 }) => {
@@ -277,7 +475,7 @@ test('switches between Chinese and English and persists the choice', async ({
 
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   await expect(page.locator('.intro h1')).toHaveText('Screenshots that pass.')
-  await expect(page.locator('#step-import')).toHaveText('Import screenshot')
+  await expect(page.locator('#step-library')).toHaveText('Screenshots')
   await expect(page.locator('.export-button')).toContainText(
     'Export compliant screenshot',
   )
