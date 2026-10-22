@@ -10,9 +10,20 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const JPEG_SIGNATURE = [0xff, 0xd8, 0xff]
 
 export class ImageValidationError extends Error {
-  constructor(message) {
-    super(message)
+  constructor(i18nKey, i18nParams = {}) {
+    super(i18nKey)
     this.name = 'ImageValidationError'
+    this.i18nKey = i18nKey
+    this.i18nParams = i18nParams
+  }
+}
+
+export class ImageProcessingError extends Error {
+  constructor(i18nKey, i18nParams = {}) {
+    super(i18nKey)
+    this.name = 'ImageProcessingError'
+    this.i18nKey = i18nKey
+    this.i18nParams = i18nParams
   }
 }
 
@@ -33,21 +44,19 @@ function matchesSignature(bytes, signature) {
 
 export async function validateFile(file) {
   if (!file) {
-    throw new ImageValidationError('请选择一张截图后再开始裁剪。')
+    throw new ImageValidationError('errors.chooseFile')
   }
 
   if (!ALLOWED_MIME_TYPES.has(file.type)) {
-    throw new ImageValidationError(
-      '仅支持 JPEG 或 PNG 格式。GIF、WebP 等格式无法用于 App Store 截图。',
-    )
+    throw new ImageValidationError('errors.unsupportedFormat')
   }
 
   if (file.size > MAX_FILE_BYTES) {
-    throw new ImageValidationError('文件大小超过 5MB，请压缩后重试。')
+    throw new ImageValidationError('errors.tooLarge')
   }
 
   if (file.size === 0) {
-    throw new ImageValidationError('这个文件是空的，请重新选择截图。')
+    throw new ImageValidationError('errors.emptyFile')
   }
 
   const signature = new Uint8Array(await file.slice(0, 8).arrayBuffer())
@@ -55,9 +64,7 @@ export async function validateFile(file) {
   const looksLikePng = matchesSignature(signature, PNG_SIGNATURE)
 
   if (!looksLikeJpeg && !looksLikePng) {
-    throw new ImageValidationError(
-      '文件内容不是有效的 JPEG 或 PNG，请重新导出后上传。',
-    )
+    throw new ImageValidationError('errors.invalidContent')
   }
 }
 
@@ -66,17 +73,19 @@ export function loadImage(url) {
     const image = new Image()
     image.decoding = 'async'
     image.onload = () => resolve(image)
-    image.onerror = () =>
-      reject(new ImageValidationError('无法读取这张图片，请换一张 JPEG 或 PNG 重试。'))
+    image.onerror = () => reject(new ImageValidationError('errors.readFailed'))
     image.src = url
   })
 }
 
 export function assertSourceDimensions(width, height) {
   if (width < MIN_SOURCE_WIDTH || height < MIN_SOURCE_HEIGHT) {
-    throw new ImageValidationError(
-      `图片尺寸为 ${formatPixels(width)} × ${formatPixels(height)}，低于最低要求 ${MIN_SOURCE_WIDTH} × ${MIN_SOURCE_HEIGHT}。请更换更高分辨率的截图。`,
-    )
+    throw new ImageValidationError('errors.dimensionsTooSmall', {
+      width: formatPixels(width),
+      height: formatPixels(height),
+      minWidth: MIN_SOURCE_WIDTH,
+      minHeight: MIN_SOURCE_HEIGHT,
+    })
   }
 }
 
@@ -121,7 +130,7 @@ function canvasToBlob(canvas, type, quality) {
     canvas.toBlob(
       (blob) => {
         if (blob) resolve(blob)
-        else reject(new Error('浏览器未能生成图片，请重试。'))
+        else reject(new ImageProcessingError('errors.encodeFailed'))
       },
       type,
       quality,
@@ -152,7 +161,7 @@ export async function encodeJpeg(canvas) {
  */
 export function encodeRgbPng(canvas) {
   const context = canvas.getContext('2d', { willReadFrequently: true })
-  if (!context) throw new Error('浏览器无法读取导出画布。')
+  if (!context) throw new ImageProcessingError('errors.canvasUnavailable')
 
   const { width, height } = canvas
   const rgba = context.getImageData(0, 0, width, height).data

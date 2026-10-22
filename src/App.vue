@@ -15,6 +15,7 @@ import {
 } from '@phosphor-icons/vue'
 import CropStage from './components/CropStage.vue'
 import SpecDialog from './components/SpecDialog.vue'
+import { locale, setLocale, t } from './lib/i18n'
 import {
   DEFAULT_TARGET_INDEX,
   MAX_FILE_BYTES,
@@ -39,7 +40,7 @@ const specRef = ref(null)
 const image = ref(null)
 const targetIndex = ref(DEFAULT_TARGET_INDEX)
 const format = ref('jpeg')
-const validationError = ref('')
+const validationError = ref(null)
 const isLoadingFile = ref(false)
 const isExporting = ref(false)
 const cropReady = ref(false)
@@ -57,9 +58,18 @@ const canExport = computed(
   () => Boolean(image.value) && cropReady.value && !isExporting.value && !isLoadingFile.value,
 )
 
+const validationErrorText = computed(() => {
+  if (!validationError.value) return ''
+  return t(validationError.value.key, validationError.value.params)
+})
+
 const sourceSummary = computed(() => {
   if (!image.value) return ''
-  return `${formatPixels(image.value.width)} × ${formatPixels(image.value.height)} px · ${formatBytes(image.value.size)}`
+  return t('app.fileSummary', {
+    width: formatPixels(image.value.width),
+    height: formatPixels(image.value.height),
+    size: formatBytes(image.value.size),
+  })
 })
 
 const upscaleWarning = computed(() => {
@@ -69,24 +79,31 @@ const upscaleWarning = computed(() => {
     target.value.height / cropMetrics.value.height,
   )
   if (!Number.isFinite(scale) || scale <= 1.02) return ''
-  return `裁剪区域约 ${formatPixels(cropMetrics.value.width)} × ${formatPixels(cropMetrics.value.height)} px，导出会放大 ${scale.toFixed(1)} 倍，画质可能下降。`
+  return t('app.upscaleWarning', {
+    width: formatPixels(cropMetrics.value.width),
+    height: formatPixels(cropMetrics.value.height),
+    scale: scale.toFixed(1),
+  })
 })
 
 const exportFootnote = computed(() => {
   if (lastExport.value) {
-    return `最近导出 ${lastExport.value.filename} · ${formatBytes(lastExport.value.size)}`
+    return t('app.exportFootLast', {
+      filename: lastExport.value.filename,
+      size: formatBytes(lastExport.value.size),
+    })
   }
-  if (!image.value) return '选择截图后即可导出合规文件'
-  if (!cropReady.value) return '正在准备裁剪画布'
-  if (format.value === 'jpeg') return 'JPG · 92% 质量 · 自动白底'
-  return 'PNG · RGB 无 Alpha · 自动白底'
+  if (!image.value) return t('app.exportFootIdle')
+  if (!cropReady.value) return t('app.exportFootPreparing')
+  if (format.value === 'jpeg') return t('app.exportFootJpeg')
+  return t('app.exportFootPng')
 })
 
 const exportButtonLabel = computed(() => {
-  if (isExporting.value) return '正在生成合规截图'
-  if (!image.value) return '导出合规截图'
-  if (!cropReady.value) return '正在准备画布'
-  return '导出合规截图'
+  if (isExporting.value) return t('app.exporting')
+  if (!image.value) return t('app.export')
+  if (!cropReady.value) return t('app.preparing')
+  return t('app.export')
 })
 
 const toastRole = computed(() => (toast.value?.tone === 'error' ? 'alert' : 'status'))
@@ -127,7 +144,7 @@ async function handleFile(file) {
   if (!file || isExporting.value) return
 
   const version = ++requestVersion
-  validationError.value = ''
+  validationError.value = null
   isLoadingFile.value = true
   let objectUrl = ''
 
@@ -171,8 +188,9 @@ async function handleFile(file) {
   } catch (error) {
     if (objectUrl) URL.revokeObjectURL(objectUrl)
     if (version !== requestVersion) return
-    validationError.value =
-      error?.message || '处理这张截图时发生错误，请重新选择文件。'
+    validationError.value = error?.i18nKey
+      ? { key: error.i18nKey, params: error.i18nParams }
+      : { key: 'errors.readFailed' }
   } finally {
     if (version === requestVersion) isLoadingFile.value = false
   }
@@ -185,7 +203,7 @@ function clearImage() {
   image.value = null
   cropMetrics.value = null
   cropReady.value = false
-  validationError.value = ''
+  validationError.value = null
   lastExport.value = null
   if (previous) revokeLater(previous.url)
 }
@@ -217,10 +235,10 @@ function onCropReady(value) {
   cropReady.value = value
 }
 
-function onCropError(message) {
+function onCropError(errorInfo) {
   showToast({
-    title: '画布初始化失败',
-    detail: message,
+    title: t('toast.canvasFailed'),
+    detail: t(errorInfo?.key || 'stage.initFailed'),
     tone: 'error',
   })
 }
@@ -252,23 +270,32 @@ async function exportScreenshot() {
     lastExport.value = { filename, size: blob.size, quality }
 
     const oversize = blob.size > MAX_FILE_BYTES
-    let detail = `${filename} · ${formatBytes(blob.size)}`
+    const detailParts = [
+      t('toast.exportDetail', {
+        filename,
+        size: formatBytes(blob.size),
+      }),
+    ]
     if (quality !== null && quality < 0.92) {
-      detail += ` · 为控制在 5MB 内，质量降至 ${Math.round(quality * 100)}%`
+      detailParts.push(
+        t('toast.qualityReduced', { quality: Math.round(quality * 100) }),
+      )
     }
     if (oversize) {
-      detail += ' · 已超过 5MB，建议改用 JPEG'
+      detailParts.push(t('toast.oversizeHint'))
     }
 
     showToast({
-      title: oversize ? '已导出，但文件超过 5MB' : '截图已导出',
-      detail,
+      title: oversize ? t('toast.exportedOversize') : t('toast.exported'),
+      detail: detailParts.join(' · '),
       tone: oversize ? 'warning' : 'success',
     })
   } catch (error) {
     showToast({
-      title: '导出失败',
-      detail: error?.message || '浏览器未能生成截图，请重试。',
+      title: t('toast.exportFailed'),
+      detail: error?.i18nKey
+        ? t(error.i18nKey, error.i18nParams)
+        : t('errors.exportFailed'),
       tone: 'error',
     })
   } finally {
@@ -280,6 +307,10 @@ watch([targetIndex, format], () => {
   lastExport.value = null
 })
 
+watch(locale, () => {
+  dismissToast()
+})
+
 onBeforeUnmount(() => {
   requestVersion += 1
   window.clearTimeout(toastTimer)
@@ -288,7 +319,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="`locale-${locale}`">
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
@@ -297,28 +328,61 @@ onBeforeUnmount(() => {
         </span>
         <span class="brand-name">framecheck</span>
         <span class="brand-divider" aria-hidden="true"></span>
-        <span class="brand-descriptor">Mac App Store 截图合规</span>
+        <span class="brand-descriptor">{{ t('brand.descriptor') }}</span>
       </div>
 
       <div class="topbar-actions">
         <span class="local-status">
           <LockSimple :size="13" weight="bold" aria-hidden="true" />
-          <span>纯本地处理</span>
+          <span>{{ t('topbar.local') }}</span>
         </span>
+        <div
+          class="locale-switch"
+          role="group"
+          :aria-label="t('locale.groupLabel')"
+        >
+          <button
+            class="locale-option"
+            :class="{ 'is-active': locale === 'zh' }"
+            type="button"
+            data-locale="zh"
+            :aria-label="t('locale.zhLabel')"
+            :aria-pressed="locale === 'zh'"
+            @click="setLocale('zh')"
+          >
+            中
+          </button>
+          <button
+            class="locale-option"
+            :class="{ 'is-active': locale === 'en' }"
+            type="button"
+            data-locale="en"
+            :aria-label="t('locale.enLabel')"
+            :aria-pressed="locale === 'en'"
+            @click="setLocale('en')"
+          >
+            EN
+          </button>
+        </div>
         <a
           class="repo-button"
           href="https://github.com/cnliucheng/TopPicture"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="在 GitHub 查看 Framecheck 源码"
-          title="在 GitHub 查看源码"
+          :aria-label="t('topbar.githubAria')"
+          :title="t('topbar.githubTitle')"
         >
           <GithubLogo :size="14" weight="bold" aria-hidden="true" />
           <span>GitHub</span>
         </a>
-        <button class="spec-button" type="button" @click="specRef?.open()">
+        <button
+          class="spec-button"
+          type="button"
+          :aria-label="t('topbar.spec')"
+          @click="specRef?.open()"
+        >
           <Info :size="14" weight="bold" aria-hidden="true" />
-          <span>Apple 规范</span>
+          <span>{{ t('topbar.spec') }}</span>
           <ArrowUpRight :size="12" weight="bold" aria-hidden="true" />
         </button>
       </div>
@@ -329,21 +393,17 @@ onBeforeUnmount(() => {
         <div class="intro">
           <p class="eyebrow">
             <span class="eyebrow-mark" aria-hidden="true"></span>
-            Screenshot compliance
+            {{ t('intro.eyebrow') }}
           </p>
-          <h1 id="page-title">
-            截图，<span>一次过审</span><em>.</em>
-          </h1>
-          <p class="lede">
-            锁定 16:10 比例，自动压平透明通道。导出即可提交的 Mac App Store 截图。
-          </p>
+          <h1 id="page-title">{{ t('intro.titleLead') }}<span>{{ t('intro.titleAccent') }}</span><em>.</em></h1>
+          <p class="lede">{{ t('intro.lede') }}</p>
         </div>
 
         <div class="control-stack">
           <section class="control-step" aria-labelledby="step-import">
             <div class="step-head">
               <span class="step-index">01</span>
-              <h2 id="step-import">导入截图</h2>
+              <h2 id="step-import">{{ t('app.stepImport') }}</h2>
               <span class="step-note">≤ 5 MB</span>
             </div>
 
@@ -352,7 +412,7 @@ onBeforeUnmount(() => {
               class="visually-hidden"
               type="file"
               accept="image/jpeg,image/png,.jpg,.jpeg,.png"
-              aria-label="选择截图文件"
+              :aria-label="t('app.fileInputAria')"
               tabindex="-1"
               @change="onFileInput"
             />
@@ -373,10 +433,10 @@ onBeforeUnmount(() => {
                 <UploadSimple :size="18" weight="light" />
               </span>
               <span class="drop-copy">
-                <strong>{{ isLoadingFile ? '正在检查截图' : '选择或拖入截图' }}</strong>
-                <small>JPEG / PNG · 最大 5 MB</small>
+                <strong>{{ isLoadingFile ? t('app.dropChecking') : t('app.dropTitle') }}</strong>
+                <small>{{ t('app.dropMeta') }}</small>
               </span>
-              <span class="browse-label">{{ isLoadingFile ? '检查中' : '浏览' }}</span>
+              <span class="browse-label">{{ isLoadingFile ? t('app.checking') : t('app.browse') }}</span>
             </button>
 
             <div v-else class="file-card">
@@ -390,8 +450,8 @@ onBeforeUnmount(() => {
               <button
                 class="file-remove"
                 type="button"
-                aria-label="移除当前截图"
-                title="移除当前截图"
+                :aria-label="t('app.removeAria')"
+                :title="t('app.removeAria')"
                 @click="clearImage"
               >
                 <X :size="14" weight="bold" aria-hidden="true" />
@@ -400,7 +460,7 @@ onBeforeUnmount(() => {
 
             <div v-if="image" class="file-actions">
               <button class="text-button" type="button" @click="openFilePicker">
-                更换图片
+                {{ t('app.replace') }}
               </button>
               <span
                 class="scan-state"
@@ -418,7 +478,7 @@ onBeforeUnmount(() => {
                   weight="bold"
                   aria-hidden="true"
                 />
-                {{ image.transparent ? '有透明像素' : '无透明像素' }}
+                {{ image.transparent ? t('app.scanTransparent') : t('app.scanOpaque') }}
               </span>
             </div>
 
@@ -428,7 +488,7 @@ onBeforeUnmount(() => {
               role="status"
             >
               <WarningCircle :size="14" weight="bold" aria-hidden="true" />
-              检测到透明区域，导出时将自动填充为白色背景。
+              {{ t('app.transparencyNotice') }}
             </p>
 
             <p
@@ -437,18 +497,18 @@ onBeforeUnmount(() => {
               role="alert"
             >
               <WarningCircle :size="14" weight="bold" aria-hidden="true" />
-              {{ validationError }}
+              {{ validationErrorText }}
             </p>
           </section>
 
           <section class="control-step" aria-labelledby="step-size">
             <div class="step-head">
               <span class="step-index">02</span>
-              <h2 id="step-size">目标尺寸</h2>
+              <h2 id="step-size">{{ t('app.stepSize') }}</h2>
               <span class="step-note">16:10</span>
             </div>
 
-            <label class="visually-hidden" for="target-size">目标分辨率</label>
+            <label class="visually-hidden" for="target-size">{{ t('app.targetResolution') }}</label>
             <div class="select-shell">
               <select id="target-size" v-model.number="targetIndex">
                 <option
@@ -463,7 +523,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="select-meta">
-              <span><span class="mono">16:10</span> 锁定比例</span>
+              <span><span class="mono">16:10</span> {{ t('app.aspectLocked') }}</span>
               <span>{{ target.label }} px</span>
             </div>
 
@@ -480,12 +540,12 @@ onBeforeUnmount(() => {
           <section class="control-step" aria-labelledby="step-format">
             <div class="step-head">
               <span class="step-index">03</span>
-              <h2 id="step-format">导出格式</h2>
+              <h2 id="step-format">{{ t('app.stepFormat') }}</h2>
               <span class="step-note">JPEG / PNG</span>
             </div>
 
             <fieldset class="format-options">
-              <legend class="visually-hidden">选择导出格式</legend>
+              <legend class="visually-hidden">{{ t('app.formatLegend') }}</legend>
 
               <label
                 class="format-card"
@@ -495,9 +555,9 @@ onBeforeUnmount(() => {
                 <span class="format-radio" aria-hidden="true"></span>
                 <span class="format-copy">
                   <strong>JPEG</strong>
-                  <small>92% 质量</small>
+                  <small>{{ t('app.jpegQuality') }}</small>
                 </span>
-                <span class="format-tag">推荐</span>
+                <span class="format-tag">{{ t('app.recommended') }}</span>
               </label>
 
               <label
@@ -508,9 +568,9 @@ onBeforeUnmount(() => {
                 <span class="format-radio" aria-hidden="true"></span>
                 <span class="format-copy">
                   <strong>PNG</strong>
-                  <small>无损输出</small>
+                  <small>{{ t('app.pngLossless') }}</small>
                 </span>
-                <span class="format-tag">无 Alpha</span>
+                <span class="format-tag">{{ t('app.noAlpha') }}</span>
               </label>
             </fieldset>
           </section>
@@ -583,7 +643,7 @@ onBeforeUnmount(() => {
         <button
           class="toast-close"
           type="button"
-          aria-label="关闭通知"
+          :aria-label="t('toast.closeAria')"
           @click="dismissToast"
         >
           <X :size="13" weight="bold" aria-hidden="true" />
@@ -695,6 +755,46 @@ onBeforeUnmount(() => {
   color: #487a61;
 }
 
+.locale-switch {
+  display: inline-flex;
+  height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.34);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+}
+
+.locale-option {
+  display: grid;
+  min-width: 27px;
+  height: 26px;
+  place-items: center;
+  padding: 0 6px;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  transition:
+    color 150ms ease,
+    background 150ms ease;
+}
+
+.locale-option:hover:not(.is-active) {
+  color: var(--ink);
+}
+
+.locale-option.is-active {
+  color: var(--paper);
+  background: var(--ink);
+}
+
 .repo-button,
 .spec-button {
   display: inline-flex;
@@ -778,6 +878,11 @@ onBeforeUnmount(() => {
 .intro h1 em {
   color: var(--accent);
   font-style: normal;
+}
+
+.app-shell.locale-en .intro h1 {
+  font-size: clamp(27px, 2.5vw, 34px);
+  letter-spacing: -0.05em;
 }
 
 .lede {
@@ -1533,6 +1638,10 @@ onBeforeUnmount(() => {
     font-size: clamp(34px, 7vw, 42px);
   }
 
+  .app-shell.locale-en .intro h1 {
+    font-size: clamp(25px, 6.5vw, 30px);
+  }
+
   .lede {
     max-width: 46ch;
   }
@@ -1564,6 +1673,16 @@ onBeforeUnmount(() => {
 
   .local-status {
     display: none;
+  }
+
+  .locale-switch {
+    height: 30px;
+  }
+
+  .locale-option {
+    min-width: 25px;
+    height: 24px;
+    padding: 0 5px;
   }
 
   .repo-button,

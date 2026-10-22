@@ -8,6 +8,7 @@ import {
   PhUploadSimple as UploadSimple,
 } from '@phosphor-icons/vue'
 import { CROP_RATIO } from '../lib/constants'
+import { t } from '../lib/i18n'
 import { formatPixels } from '../lib/image'
 
 const props = defineProps({
@@ -327,11 +328,10 @@ async function initCropper() {
     observeResize()
     updateMetrics()
     emitReady(true)
-  } catch (error) {
+  } catch {
     cleanupCropper()
-    initError.value =
-      error?.message || '无法初始化裁剪画布，请重新选择截图。'
-    emit('crop-error', initError.value)
+    initError.value = 'stage.initFailed'
+    emit('crop-error', { key: initError.value })
   }
 }
 
@@ -431,12 +431,12 @@ defineExpose({ renderExport, resetCrop })
   <section class="stage-panel" aria-labelledby="stage-title">
     <header class="stage-head">
       <div class="stage-heading">
-        <span class="stage-eyebrow">Preview canvas</span>
-        <h2 id="stage-title">裁剪画布</h2>
+        <span class="stage-eyebrow">{{ t('stage.eyebrow') }}</span>
+        <h2 id="stage-title">{{ t('stage.title') }}</h2>
       </div>
 
       <div class="stage-actions">
-        <span class="stage-hint">拖动裁剪 · 滚轮缩放</span>
+        <span class="stage-hint">{{ t('stage.hint') }}</span>
         <span class="ratio-badge">
           <LockSimple :size="13" weight="bold" aria-hidden="true" />
           16:10
@@ -445,8 +445,8 @@ defineExpose({ renderExport, resetCrop })
           v-if="image"
           class="stage-icon-button"
           type="button"
-          title="重置裁剪区域"
-          aria-label="重置裁剪区域"
+          :title="t('stage.reset')"
+          :aria-label="t('stage.reset')"
           :disabled="!isReady"
           @click="resetCrop"
         >
@@ -473,8 +473,8 @@ defineExpose({ renderExport, resetCrop })
           <span class="empty-icon">
             <FrameCorners :size="26" weight="light" aria-hidden="true" />
           </span>
-          <span class="empty-title">画布已准备就绪</span>
-          <span class="empty-copy">从左侧导入截图后，在这里调整构图</span>
+          <span class="empty-title">{{ t('stage.readyTitle') }}</span>
+          <span class="empty-copy">{{ t('stage.readyCopy') }}</span>
         </div>
 
         <div v-else ref="hostEl" class="cropper-host">
@@ -482,42 +482,42 @@ defineExpose({ renderExport, resetCrop })
             ref="sourceImage"
             class="cropper-source"
             :src="image.url"
-            alt="待裁剪的截图"
+            :alt="t('stage.alt')"
           />
         </div>
 
         <div v-if="image && !isReady" class="stage-loading" role="status">
           <template v-if="initError">
-            <span class="stage-error-copy">{{ initError }}</span>
+            <span class="stage-error-copy">{{ t(initError) }}</span>
             <button class="stage-retry" type="button" @click="retryCrop">
-              重新加载画布
+              {{ t('stage.retry') }}
             </button>
           </template>
           <template v-else>
             <span class="loading-line" aria-hidden="true"></span>
-            <span>正在准备 16:10 画布</span>
+            <span>{{ t('stage.loading') }}</span>
           </template>
         </div>
 
         <div v-if="dragging" class="drop-overlay" aria-hidden="true">
           <UploadSimple :size="28" weight="light" />
-          <span>松手导入截图</span>
+          <span>{{ t('stage.dropOverlay') }}</span>
         </div>
       </div>
     </div>
 
     <footer class="stage-foot">
       <div class="stage-metric">
-        <span class="metric-label">裁剪区域</span>
+        <span class="metric-label">{{ t('stage.cropArea') }}</span>
         <span class="metric-value">
-          {{ metrics ? `${formatPixels(metrics.width)} × ${formatPixels(metrics.height)} px` : '等待导入' }}
+          {{ metrics ? `${formatPixels(metrics.width)} × ${formatPixels(metrics.height)} px` : t('stage.waiting') }}
         </span>
       </div>
 
       <span class="metric-rule" aria-hidden="true"></span>
 
       <div class="stage-metric">
-        <span class="metric-label">输出</span>
+        <span class="metric-label">{{ t('stage.output') }}</span>
         <span class="metric-value metric-value--accent">
           {{ target.label }} px
         </span>
@@ -525,7 +525,7 @@ defineExpose({ renderExport, resetCrop })
 
       <div class="stage-foot-note">
         <span class="status-dot" aria-hidden="true"></span>
-        白底压平
+        {{ t('stage.flatten') }}
       </div>
     </footer>
   </section>

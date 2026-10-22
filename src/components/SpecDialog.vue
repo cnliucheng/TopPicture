@@ -6,6 +6,7 @@ import {
   PhX as X,
 } from '@phosphor-icons/vue'
 import { TARGETS } from '../lib/constants'
+import { t } from '../lib/i18n'
 
 defineProps({
   target: {
@@ -42,16 +43,14 @@ defineExpose({ open, close })
     <div class="spec-card">
       <header class="spec-header">
         <div>
-          <p class="spec-eyebrow">Apple requirements</p>
-          <h2 id="spec-title">Mac App Store 截图规范</h2>
-          <p class="spec-intro">
-            App Store Connect 只接受固定规格的 Mac 截图。尺寸、比例或透明度不符，都可能在审核阶段被退回。
-          </p>
+          <p class="spec-eyebrow">{{ t('spec.eyebrow') }}</p>
+          <h2 id="spec-title">{{ t('spec.title') }}</h2>
+          <p class="spec-intro">{{ t('spec.intro') }}</p>
         </div>
         <button
           class="spec-close"
           type="button"
-          aria-label="关闭规范说明"
+          :aria-label="t('spec.closeAria')"
           @click="close"
         >
           <X :size="17" weight="bold" aria-hidden="true" />
@@ -60,8 +59,8 @@ defineExpose({ open, close })
 
       <section class="spec-section" aria-labelledby="sizes-title">
         <div class="spec-section-head">
-          <h3 id="sizes-title">可用分辨率</h3>
-          <span>四选一</span>
+          <h3 id="sizes-title">{{ t('spec.resolutions') }}</h3>
+          <span>{{ t('spec.pickOne') }}</span>
         </div>
 
         <div class="size-list">
@@ -77,45 +76,45 @@ defineExpose({ open, close })
             </span>
             <span class="size-label">{{ size.label }}</span>
             <span class="size-ratio">16:10</span>
-            <span v-if="size.width === target.width" class="size-current">当前</span>
+            <span v-if="size.width === target.width" class="size-current">{{ t('spec.current') }}</span>
           </div>
         </div>
       </section>
 
       <section class="spec-section" aria-labelledby="rules-title">
         <div class="spec-section-head">
-          <h3 id="rules-title">必须满足</h3>
-          <span>提交前检查</span>
+          <h3 id="rules-title">{{ t('spec.requirements') }}</h3>
+          <span>{{ t('spec.preSubmit') }}</span>
         </div>
 
         <dl class="rule-list">
           <div class="rule-item">
-            <dt>固定 16:10</dt>
-            <dd>四种尺寸全部为 16:10，本工具会锁死裁剪比例。</dd>
+            <dt>{{ t('spec.fixedRatioTitle') }}</dt>
+            <dd>{{ t('spec.fixedRatioBody') }}</dd>
           </div>
           <div class="rule-item">
-            <dt>无 Alpha 通道</dt>
-            <dd>透明区域会在导出时压平为白色，PNG 也会移除 Alpha 通道。</dd>
+            <dt>{{ t('spec.noAlphaTitle') }}</dt>
+            <dd>{{ t('spec.noAlphaBody') }}</dd>
           </div>
           <div class="rule-item">
-            <dt>JPEG 或 PNG</dt>
-            <dd>仅接受 .jpg、.jpeg 或 .png 文件。</dd>
+            <dt>{{ t('spec.formatsTitle') }}</dt>
+            <dd>{{ t('spec.formatsBody') }}</dd>
           </div>
           <div class="rule-item">
-            <dt>不超过 5MB</dt>
-            <dd>上传与导出的文件都应控制在 5MB 以内。</dd>
+            <dt>{{ t('spec.sizeTitle') }}</dt>
+            <dd>{{ t('spec.sizeBody') }}</dd>
           </div>
         </dl>
       </section>
 
       <footer class="spec-footer">
-        <p>不确定时，优先使用 1440 × 900 与 JPEG 92% 质量。</p>
+        <p>{{ t('spec.tip') }}</p>
         <a
           href="https://developer.apple.com/help/app-store-connect/reference/screenshot-specifications/"
           target="_blank"
           rel="noopener noreferrer"
         >
-          Apple 官方说明
+          {{ t('spec.official') }}
           <ArrowUpRight :size="13" weight="bold" aria-hidden="true" />
         </a>
       </footer>

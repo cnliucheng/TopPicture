@@ -2,7 +2,9 @@
 
 为 Mac App Store 截图打造的一站式合规工具。纯前端处理，锁定 16:10，压平透明度，导出 Apple 审核要求的精确尺寸。
 
-![Framecheck 界面](docs/preview.png)
+| 中文 | English |
+|:---:|:---:|
+| ![中文界面](docs/preview.png) | ![English interface](docs/preview-en.png) |
 
 **GitHub 仓库**：[cnliucheng/TopPicture](https://github.com/cnliucheng/TopPicture)
 
@@ -27,7 +29,9 @@ Mac App Store 对截图有硬性限制：
 - **无 Alpha PNG**：显式编码为 RGB 8-bit PNG，而不是浏览器默认的 RGBA
 - **JPEG 体积控制**：默认 92% 质量，超过 5MB 时自动降质量
 - **纯本地处理**：图片不会上传到服务器
+- **中英双语**：一键切换中文与 English，自动跟随浏览器语言并记住选择
 - **响应式界面**：桌面工作台与移动端均可使用
+- **完整本地化**：界面、校验错误、导出提示与页面标题都会同步切换
 
 ## 支持尺寸
 
@@ -175,7 +179,7 @@ npm run test:e2e
 - 切换目标尺寸时 Cropper 实例是否保持
 - JPEG 文件是否小于 5MB
 
-当前结果：**9 passed**。
+当前结果：**10 passed**。
 
 ## 项目结构
 
@@ -187,6 +191,7 @@ src/
     SpecDialog.vue         # Apple 规范弹窗
   lib/
     constants.js           # 分辨率与限制常量
+    i18n.js                # 中英双语文案与语言持久化
     image.js               # 校验、透明检测、编码与下载
   styles.css               # 全局设计变量与基础样式
 tests/

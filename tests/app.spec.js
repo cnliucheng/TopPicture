@@ -81,6 +81,12 @@ function readPngChunkTypes(buffer) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem('__locale_seeded')) {
+      localStorage.setItem('framecheck-locale', 'zh')
+      sessionStorage.setItem('__locale_seeded', '1')
+    }
+  })
   await openApp(page)
 })
 
@@ -259,6 +265,52 @@ test('supports wheel zoom and resetting the crop view', async ({ page }) => {
       ),
     )
     .toBeCloseTo(initialScale, 2)
+})
+
+test('switches between Chinese and English and persists the choice', async ({
+  page,
+}) => {
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
+  await expect(page.locator('.intro h1')).toHaveText('截图，一次过审.')
+
+  await page.locator('[data-locale="en"]').click()
+
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+  await expect(page.locator('.intro h1')).toHaveText('Screenshots that pass.')
+  await expect(page.locator('#step-import')).toHaveText('Import screenshot')
+  await expect(page.locator('.export-button')).toContainText(
+    'Export compliant screenshot',
+  )
+  await expect(page.getByRole('button', { name: 'Apple rules' })).toBeVisible()
+
+  const headlineOverflow = await page
+    .locator('.intro h1')
+    .evaluate((element) => element.scrollWidth > element.clientWidth + 1)
+  expect(headlineOverflow).toBe(false)
+
+  await page.getByRole('button', { name: 'Apple rules' }).click()
+  await expect(page.locator('#spec-title')).toHaveText(
+    'Mac App Store screenshot rules',
+  )
+  await page.locator('.spec-close').click()
+
+  await page.reload()
+  await expect(page.locator('.intro h1')).toHaveText('Screenshots that pass.')
+
+  await uploadFile(page, {
+    name: 'too-large.jpg',
+    mimeType: 'image/jpeg',
+    buffer: Buffer.alloc(5 * 1024 * 1024 + 1, 0x20),
+  })
+  await expect(page.locator('.inline-notice--error')).toContainText(
+    'File is larger than 5MB',
+  )
+
+  await page.locator('[data-locale="zh"]').click()
+  await expect(page.locator('.intro h1')).toHaveText('截图，一次过审.')
+  await expect(page.locator('.inline-notice--error')).toContainText(
+    '文件大小超过 5MB',
+  )
 })
 
 test('defaults to 1440x900 and changes export size without rebuilding the cropper', async ({
