@@ -12,6 +12,7 @@ import {
   PhX as X,
 } from '@phosphor-icons/vue'
 import CropStage from './components/CropStage.vue'
+import DeleteImageDialog from './components/DeleteImageDialog.vue'
 import ImageLibrary from './components/ImageLibrary.vue'
 import SpecDialog from './components/SpecDialog.vue'
 import {
@@ -35,6 +36,7 @@ import {
 
 const stageRef = ref(null)
 const specRef = ref(null)
+const deleteDialogRef = ref(null)
 
 const images = ref([])
 const activeId = ref(null)
@@ -47,6 +49,9 @@ const cropReady = ref(false)
 const cropMetrics = ref(null)
 const toast = ref(null)
 const lastExport = ref(null)
+const pendingDeleteId = ref(null)
+const isSavingDelete = ref(false)
+const showAddTile = ref(false)
 
 let nextImageId = 1
 let nextErrorId = 1
@@ -57,8 +62,11 @@ const activeImage = computed(
   () => images.value.find((item) => item.id === activeId.value) ?? null,
 )
 const target = computed(() => TARGETS[targetIndex.value])
+const pendingDeleteImage = computed(
+  () => images.value.find((item) => item.id === pendingDeleteId.value) ?? null,
+)
 const isLocked = computed(
-  () => isLoadingFiles.value || isExporting.value,
+  () => isLoadingFiles.value || isExporting.value || isSavingDelete.value,
 )
 const canExport = computed(
   () =>
@@ -139,7 +147,7 @@ function fileImportError(file, error) {
 }
 
 async function handleFiles(files) {
-  if (isLoadingFiles.value || isExporting.value) return
+  if (isLoadingFiles.value || isExporting.value || isSavingDelete.value) return
 
   const selectedFiles = Array.from(files || []).filter(
     (file) => file instanceof File,
@@ -223,6 +231,7 @@ async function handleFiles(files) {
       cropMetrics.value = null
       cropReady.value = false
       lastExport.value = null
+      showAddTile.value = false
     }
 
     importErrors.value = errors
@@ -251,9 +260,7 @@ function selectImage(id) {
   lastExport.value = null
 }
 
-function removeImage(id) {
-  if (isLocked.value) return
-
+function deleteImageNow(id) {
   const index = images.value.findIndex((item) => item.id === id)
   if (index < 0) return
 
@@ -265,7 +272,108 @@ function removeImage(id) {
     cropReady.value = false
     lastExport.value = null
   }
+  showAddTile.value = true
   revokeLater(removed.url)
+}
+
+async function requestRemoveImage(id) {
+  if (isLocked.value) return
+  if (!images.value.some((item) => item.id === id)) return
+
+  pendingDeleteId.value = id
+  await nextTick()
+  deleteDialogRef.value?.open()
+}
+
+function closeDeletePrompt() {
+  if (isSavingDelete.value) return
+  deleteDialogRef.value?.close()
+  pendingDeleteId.value = null
+}
+
+function confirmDelete() {
+  const id = pendingDeleteId.value
+  if (!id) return
+  deleteDialogRef.value?.close()
+  deleteImageNow(id)
+  pendingDeleteId.value = null
+}
+
+function waitForCropReady(timeout = 10000) {
+  if (cropReady.value) return Promise.resolve(true)
+
+  return new Promise((resolve) => {
+    const startedAt = performance.now()
+    const check = () => {
+      if (cropReady.value) {
+        resolve(true)
+        return
+      }
+      if (performance.now() - startedAt >= timeout) {
+        resolve(false)
+        return
+      }
+      window.setTimeout(check, 50)
+    }
+    check()
+  })
+}
+
+async function saveAndDelete() {
+  if (isSavingDelete.value || !pendingDeleteImage.value) return
+
+  const targetImage = pendingDeleteImage.value
+  const previousActive = activeId.value
+  const switchedImage = previousActive !== targetImage.id
+  isSavingDelete.value = true
+
+  try {
+    if (switchedImage) {
+      activeId.value = targetImage.id
+      cropMetrics.value = null
+      cropReady.value = false
+      lastExport.value = null
+    }
+
+    const ready = await waitForCropReady()
+    if (!ready) throw new Error('errors.exportFailed')
+
+    isExporting.value = true
+    await nextTick()
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()))
+    const result = await buildExportDownload()
+
+    deleteDialogRef.value?.close()
+    deleteImageNow(targetImage.id)
+    pendingDeleteId.value = null
+
+    if (
+      switchedImage &&
+      images.value.some((item) => item.id === previousActive)
+    ) {
+      activeId.value = previousActive
+      cropMetrics.value = null
+      cropReady.value = false
+      lastExport.value = null
+    }
+
+    showToast({
+      title: t('toast.savedAndDeleted'),
+      detail: buildExportDetail(result),
+      tone: result.oversize ? 'warning' : 'success',
+    })
+  } catch (error) {
+    showToast({
+      title: t('toast.exportFailed'),
+      detail: error?.i18nKey
+        ? t(error.i18nKey, error.i18nParams)
+        : t('errors.exportFailed'),
+      tone: 'error',
+    })
+  } finally {
+    isExporting.value = false
+    isSavingDelete.value = false
+  }
 }
 
 function onCropChange(nextMetrics) {
@@ -284,6 +392,51 @@ function onCropError(errorInfo) {
   })
 }
 
+async function buildExportDownload() {
+  if (!stageRef.value) throw new Error('errors.exportFailed')
+
+  const canvas = await stageRef.value.renderExport()
+  let blob
+  let quality = null
+  let filename
+
+  if (format.value === 'jpeg') {
+    const encoded = await encodeJpeg(canvas)
+    blob = encoded.blob
+    quality = encoded.quality
+    filename = `screenshot_${target.value.width}x${target.value.height}.jpg`
+  } else {
+    blob = encodeRgbPng(canvas)
+    filename = `screenshot_${target.value.width}x${target.value.height}.png`
+  }
+
+  downloadBlob(blob, filename)
+  const oversize = blob.size > MAX_FILE_BYTES
+  lastExport.value = { filename, size: blob.size, quality }
+
+  return { blob, quality, filename, oversize }
+}
+
+function buildExportDetail(result) {
+  const detailParts = [
+    t('toast.exportDetail', {
+      filename: result.filename,
+      size: formatBytes(result.blob.size),
+    }),
+  ]
+  if (result.quality !== null && result.quality < 0.92) {
+    detailParts.push(
+      t('toast.qualityReduced', {
+        quality: Math.round(result.quality * 100),
+      }),
+    )
+  }
+  if (result.oversize) {
+    detailParts.push(t('toast.oversizeHint'))
+  }
+  return detailParts.join(' · ')
+}
+
 async function exportScreenshot() {
   if (!canExport.value || !stageRef.value) return
 
@@ -292,44 +445,13 @@ async function exportScreenshot() {
   await new Promise((resolve) => requestAnimationFrame(() => resolve()))
 
   try {
-    const canvas = await stageRef.value.renderExport()
-    let blob
-    let quality = null
-    let filename
-
-    if (format.value === 'jpeg') {
-      const encoded = await encodeJpeg(canvas)
-      blob = encoded.blob
-      quality = encoded.quality
-      filename = `screenshot_${target.value.width}x${target.value.height}.jpg`
-    } else {
-      blob = encodeRgbPng(canvas)
-      filename = `screenshot_${target.value.width}x${target.value.height}.png`
-    }
-
-    downloadBlob(blob, filename)
-    lastExport.value = { filename, size: blob.size, quality }
-
-    const oversize = blob.size > MAX_FILE_BYTES
-    const detailParts = [
-      t('toast.exportDetail', {
-        filename,
-        size: formatBytes(blob.size),
-      }),
-    ]
-    if (quality !== null && quality < 0.92) {
-      detailParts.push(
-        t('toast.qualityReduced', { quality: Math.round(quality * 100) }),
-      )
-    }
-    if (oversize) {
-      detailParts.push(t('toast.oversizeHint'))
-    }
-
+    const result = await buildExportDownload()
     showToast({
-      title: oversize ? t('toast.exportedOversize') : t('toast.exported'),
-      detail: detailParts.join(' · '),
-      tone: oversize ? 'warning' : 'success',
+      title: result.oversize
+        ? t('toast.exportedOversize')
+        : t('toast.exported'),
+      detail: buildExportDetail(result),
+      tone: result.oversize ? 'warning' : 'success',
     })
   } catch (error) {
     showToast({
@@ -343,7 +465,6 @@ async function exportScreenshot() {
     isExporting.value = false
   }
 }
-
 watch([targetIndex, format], () => {
   lastExport.value = null
 })
@@ -458,8 +579,10 @@ onBeforeUnmount(() => {
               :images="images"
               :active-id="activeId"
               :disabled="isLocked"
+              :show-add-tile="showAddTile && images.length < MAX_IMAGES"
               @select="selectImage"
-              @remove="removeImage"
+              @remove="requestRemoveImage"
+              @files-selected="handleFiles"
             />
 
             <p
@@ -612,6 +735,14 @@ onBeforeUnmount(() => {
     </main>
 
     <SpecDialog ref="specRef" :target="target" />
+    <DeleteImageDialog
+      ref="deleteDialogRef"
+      :image-name="pendingDeleteImage?.name || ''"
+      :saving="isSavingDelete"
+      @cancel="closeDeletePrompt"
+      @delete="confirmDelete"
+      @save="saveAndDelete"
+    />
 
     <Transition name="toast">
       <div

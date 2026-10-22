@@ -34,6 +34,8 @@ const messages = {
     'library.transparent': '含透明像素',
     'library.opaque': '无透明像素',
     'library.hint': '点击缩略图切换当前截图',
+    'library.addOne': '添加一张',
+    'library.addOneAria': '再添加一张截图',
 
     'app.fileInputAria': '选择截图文件',
     'app.transparencyNotice':
@@ -59,6 +61,9 @@ const messages = {
     'app.exportFootLast': '最近导出 {filename} · {size}',
 
     'stage.addImages': '添加图片',
+    'stage.scaleImage': '缩放原图',
+    'stage.scaleDone': '完成缩放',
+    'stage.transformHint': '拖动边框等比缩放 · 拖动图片移动',
     'stage.limitReached': '已达上限',
     'stage.limitTitle': '最多添加 {max} 张截图',
     'stage.emptyTitle': '把截图放到这里',
@@ -101,6 +106,14 @@ const messages = {
     'spec.official': 'Apple 官方说明',
     'spec.closeAria': '关闭规范说明',
 
+    'delete.title': '删除这张截图？',
+    'delete.body': '删除前是否保存当前裁剪修改？保存会按当前格式和分辨率导出一份文件。',
+    'delete.cancel': '取消',
+    'delete.skip': '不保存，删除',
+    'delete.save': '保存并删除',
+    'delete.saving': '正在保存...',
+    'delete.closeAria': '关闭删除确认',
+    'toast.savedAndDeleted': '已保存并删除',
     'toast.importPartial': '部分截图未导入',
     'toast.importFailed': '截图未导入',
     'toast.exported': '截图已导出',
@@ -159,6 +172,8 @@ const messages = {
     'library.transparent': 'Has transparency',
     'library.opaque': 'No transparency',
     'library.hint': 'Select a thumbnail to switch the active screenshot',
+    'library.addOne': 'Add one',
+    'library.addOneAria': 'Add one more screenshot',
 
     'app.fileInputAria': 'Choose a screenshot file',
     'app.transparencyNotice':
@@ -184,6 +199,9 @@ const messages = {
     'app.exportFootLast': 'Last export {filename} · {size}',
 
     'stage.addImages': 'Add images',
+    'stage.scaleImage': 'Scale image',
+    'stage.scaleDone': 'Done',
+    'stage.transformHint': 'Drag the frame to scale · Drag inside to move',
     'stage.limitReached': 'Limit reached',
     'stage.limitTitle': 'Up to {max} screenshots',
     'stage.emptyTitle': 'Drop screenshots here',
@@ -228,6 +246,14 @@ const messages = {
     'spec.official': 'Official Apple docs',
     'spec.closeAria': 'Close guidelines',
 
+    'delete.title': 'Delete this screenshot?',
+    'delete.body': 'Save your current crop before deleting? Saving downloads a file using the current format and size.',
+    'delete.cancel': 'Cancel',
+    'delete.skip': 'Delete without saving',
+    'delete.save': 'Save and delete',
+    'delete.saving': 'Saving...',
+    'delete.closeAria': 'Close delete confirmation',
+    'toast.savedAndDeleted': 'Saved and deleted',
     'toast.importPartial': 'Some screenshots were not imported',
     'toast.importFailed': 'Screenshots not imported',
     'toast.exported': 'Screenshot exported',

@@ -1,12 +1,14 @@
 <script setup>
 import {
   PhImages as Images,
+  PhPlus as Plus,
   PhX as X,
 } from '@phosphor-icons/vue'
+import { ref } from 'vue'
 import { t } from '../lib/i18n'
 import { formatPixels } from '../lib/image'
 
-defineProps({
+const props = defineProps({
   images: {
     type: Array,
     default: () => [],
@@ -19,14 +21,41 @@ defineProps({
     type: Boolean,
     default: false,
   },
+  showAddTile: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['select', 'remove'])
+const emit = defineEmits(['select', 'remove', 'files-selected'])
+const addInput = ref(null)
+
+function openAddPicker() {
+  if (props.disabled || !props.showAddTile) return
+  addInput.value?.click()
+}
+
+function onAddInput(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (file) emit('files-selected', [file])
+}
 </script>
 
 <template>
   <div class="image-library">
-    <div v-if="!images.length" class="library-empty">
+    <input
+      v-if="showAddTile"
+      ref="addInput"
+      class="visually-hidden"
+      type="file"
+      accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+      :disabled="disabled"
+      :aria-label="t('library.addOneAria')"
+      @change="onAddInput"
+    />
+
+    <div v-if="!images.length && !showAddTile" class="library-empty">
       <span class="library-empty-icon" aria-hidden="true">
         <Images :size="18" weight="light" />
       </span>
@@ -34,7 +63,24 @@ const emit = defineEmits(['select', 'remove'])
     </div>
 
     <template v-else>
-      <div class="thumb-grid" role="list" :aria-label="t('library.aria')">
+      <button
+        v-if="!images.length && showAddTile"
+        class="library-add-empty"
+        type="button"
+        :disabled="disabled"
+        :aria-label="t('library.addOneAria')"
+        @click="openAddPicker"
+      >
+        <Plus :size="18" weight="light" aria-hidden="true" />
+        <span>{{ t('library.addOne') }}</span>
+      </button>
+
+      <div
+        v-else
+        class="thumb-grid"
+        role="list"
+        :aria-label="t('library.aria')"
+      >
         <div
           v-for="(item, index) in images"
           :key="item.id"
@@ -83,9 +129,24 @@ const emit = defineEmits(['select', 'remove'])
             <X :size="10" weight="bold" aria-hidden="true" />
           </button>
         </div>
+
+        <div v-if="showAddTile" class="thumb-add-cell" role="listitem">
+          <button
+            class="thumb-add"
+            type="button"
+            :disabled="disabled"
+            :aria-label="t('library.addOneAria')"
+            @click="openAddPicker"
+          >
+            <Plus :size="19" weight="light" aria-hidden="true" />
+            <span>{{ t('library.addOne') }}</span>
+          </button>
+        </div>
       </div>
 
-      <p class="library-hint">{{ t('library.hint') }}</p>
+      <p v-if="images.length" class="library-hint">
+        {{ t('library.hint') }}
+      </p>
     </template>
   </div>
 </template>
@@ -282,6 +343,75 @@ const emit = defineEmits(['select', 'remove'])
 .thumb-remove:disabled {
   cursor: wait;
   opacity: 0.4;
+}
+
+.thumb-add-cell {
+  display: flex;
+  min-width: 0;
+}
+
+.thumb-add {
+  display: flex;
+  width: 100%;
+  min-height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.02em;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.thumb-add:hover:not(:disabled) {
+  color: var(--accent-strong);
+  background: rgba(255, 90, 47, 0.045);
+  border-color: rgba(255, 90, 47, 0.55);
+}
+
+.thumb-add:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.library-add-empty {
+  display: flex;
+  width: 100%;
+  min-height: 76px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  background: rgba(255, 255, 255, 0.24);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-control);
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.library-add-empty:hover:not(:disabled) {
+  color: var(--accent-strong);
+  background: rgba(255, 90, 47, 0.045);
+  border-color: rgba(255, 90, 47, 0.55);
+}
+
+.library-add-empty:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 .library-hint {

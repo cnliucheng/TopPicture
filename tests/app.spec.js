@@ -371,8 +371,11 @@ test('imports multiple images and preserves each crop view', async ({ page }) =>
     .toBeCloseTo(zoomedScale, 4)
 
   await page.locator('.thumb-card').first().locator('.thumb-remove').click()
+  await expect(page.locator('.delete-dialog')).toBeVisible()
+  await page.getByRole('button', { name: '不保存，删除' }).click()
   await expect(page.locator('.thumb-card')).toHaveCount(1)
   await expect(page.locator('.thumb-card').first()).toHaveClass(/is-active/)
+  await expect(page.locator('.thumb-add')).toBeVisible()
 })
 
 test('keeps valid images when part of a batch fails validation', async ({
@@ -465,6 +468,117 @@ test('keeps the import entry point on the canvas only', async ({ page }) => {
   await expect(page.locator('input[type=file]')).toHaveCount(1)
 })
 
+test('shows a plus slot after deletion and allows adding one image', async ({
+  page,
+}) => {
+  await uploadFile(page, [
+    fixture('app-screenshot.jpg'),
+    fixture('transparent-screenshot.png'),
+  ])
+  await expect(page.locator('.thumb-card')).toHaveCount(2)
+
+  await page.locator('.thumb-card').first().locator('.thumb-remove').click()
+  await expect(page.locator('.delete-dialog')).toBeVisible()
+  await expect(page.locator('.delete-file')).toHaveText('app-screenshot.jpg')
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.locator('.thumb-card')).toHaveCount(2)
+  await expect(page.locator('.thumb-add')).toHaveCount(0)
+
+  await page.locator('.thumb-card').first().locator('.thumb-remove').click()
+  await page.getByRole('button', { name: '不保存，删除' }).click()
+  await expect(page.locator('.thumb-card')).toHaveCount(1)
+  await expect(page.locator('.thumb-add')).toBeVisible()
+
+  const chooserPromise = page.waitForEvent('filechooser')
+  await page.locator('.thumb-add').click()
+  const chooser = await chooserPromise
+  await chooser.setFiles(fixture('app-screenshot.jpg'))
+
+  await expect(page.locator('.thumb-card')).toHaveCount(2)
+  await expect(page.locator('.thumb-add')).toHaveCount(0)
+  await expect(
+    page.locator('.image-library input[type=file]'),
+  ).toHaveCount(0)
+})
+
+test('saves a non-active image before deleting it', async ({ page }) => {
+  await uploadFile(page, [
+    fixture('app-screenshot.jpg'),
+    fixture('transparent-screenshot.png'),
+  ])
+  await expect(page.locator('.thumb-card').first()).toHaveClass(/is-active/)
+
+  await page.locator('.thumb-card').nth(1).locator('.thumb-remove').click()
+  await expect(page.locator('.delete-file')).toHaveText(
+    'transparent-screenshot.png',
+  )
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: '保存并删除' }).click()
+  const download = await downloadPromise
+  const buffer = await readDownload(download)
+
+  expect(download.suggestedFilename()).toBe('screenshot_1440x900.jpg')
+  expect(readJpegSize(buffer)).toEqual({ width: 1440, height: 900 })
+  await expect(page.locator('.thumb-card')).toHaveCount(1)
+  await expect(page.locator('.thumb-card').first()).toHaveClass(/is-active/)
+  await expect(page.locator('.thumb-card').first()).toContainText(
+    'app-screenshot.jpg',
+  )
+  await expect(page.locator('.toast')).toContainText('已保存并删除')
+  await expect(page.locator('.thumb-add')).toBeVisible()
+})
+
+test('shows the image frame and scales the original proportionally', async ({
+  page,
+}) => {
+  await uploadFixture(page, 'app-screenshot.jpg')
+
+  await expect(page.locator('.image-frame')).toBeVisible()
+  await expect(page.locator('.image-frame')).not.toHaveClass(/is-active/)
+
+  await page.locator('.stage-mode-button').click()
+  await expect(page.locator('.stage-mode-button')).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  await expect(page.locator('.image-frame')).toHaveClass(/is-active/)
+  await expect(page.locator('.image-handle')).toHaveCount(8)
+  await expect(page.locator('cropper-selection')).toBeHidden()
+
+  const before = await page.evaluate(
+    () => document.querySelector('cropper-image').$getTransform()[0],
+  )
+  const handle = await page.locator('.image-handle--se').boundingBox()
+  expect(handle).not.toBeNull()
+
+  const startX = handle.x + handle.width / 2
+  const startY = handle.y + handle.height / 2
+  await page.mouse.move(startX, startY)
+  await page.mouse.down()
+  await page.mouse.move(startX + 70, startY + 52, { steps: 12 })
+  await page.mouse.up()
+
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () => document.querySelector('cropper-image').$getTransform()[0],
+      ),
+    )
+    .toBeGreaterThan(before)
+
+  await page.locator('.stage-mode-button').click()
+  await expect(page.locator('cropper-selection')).toBeVisible()
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const selection = document.querySelector('cropper-selection')
+        return selection.width / selection.height
+      }),
+    )
+    .toBeCloseTo(1.6, 4)
+})
+
 test('switches between Chinese and English and persists the choice', async ({
   page,
 }) => {
@@ -509,6 +623,34 @@ test('switches between Chinese and English and persists the choice', async ({
   await expect(page.locator('.inline-notice--error')).toContainText(
     '文件大小超过 5MB',
   )
+})
+
+test('localizes the image scaling and delete controls', async ({ page }) => {
+  await page.locator('[data-locale="en"]').click()
+  await uploadFixture(page, 'app-screenshot.jpg')
+
+  await expect(
+    page.getByRole('button', { name: 'Scale image' }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Scale image' }).click()
+  await expect(page.getByRole('button', { name: 'Done' })).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Scale image' }),
+  ).toHaveCount(0)
+  await page.getByRole('button', { name: 'Done' }).click()
+
+  await page.locator('.thumb-remove').click()
+  await expect(page.locator('#delete-title')).toHaveText(
+    'Delete this screenshot?',
+  )
+  await expect(
+    page.getByRole('button', { name: 'Delete without saving' }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Save and delete' }),
+  ).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(page.locator('.thumb-card')).toHaveCount(1)
 })
 
 test('defaults to 1440x900 and changes export size without rebuilding the cropper', async ({
