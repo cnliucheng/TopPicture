@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.npm-cache/
+.playwright-browsers/
+test-results/
+playwright-report/
+tests/qa-*.png
+tests/export-*.jpg
+tests/export-*.png
+qa*.mjs
+.DS_Store
+.remote-check/
