@@ -21,6 +21,7 @@ import {
   MAX_IMAGES,
   TARGETS,
 } from './lib/constants'
+import { createStandardizedImage } from './lib/fit'
 import { locale, setLocale, t } from './lib/i18n'
 import {
   assertSourceDimensions,
@@ -51,6 +52,7 @@ const toast = ref(null)
 const lastExport = ref(null)
 const pendingDeleteId = ref(null)
 const isSavingDelete = ref(false)
+const isFitting = ref(false)
 const showAddTile = ref(false)
 
 let nextImageId = 1
@@ -66,7 +68,11 @@ const pendingDeleteImage = computed(
   () => images.value.find((item) => item.id === pendingDeleteId.value) ?? null,
 )
 const isLocked = computed(
-  () => isLoadingFiles.value || isExporting.value || isSavingDelete.value,
+  () =>
+    isLoadingFiles.value ||
+    isExporting.value ||
+    isSavingDelete.value ||
+    isFitting.value,
 )
 const canExport = computed(
   () =>
@@ -202,6 +208,7 @@ async function handleFiles(files) {
         assertSourceDimensions(decoded.naturalWidth, decoded.naturalHeight)
         const transparency = await detectTransparency(decoded)
 
+        const sourceUrl = objectUrl
         nextImages.push({
           id: `image-${nextImageId++}`,
           name: file.name || 'screenshot',
@@ -209,7 +216,10 @@ async function handleFiles(files) {
           size: file.size,
           width: decoded.naturalWidth,
           height: decoded.naturalHeight,
-          url: objectUrl,
+          url: sourceUrl,
+          sourceUrl,
+          fitMode: null,
+          fitRevision: 0,
           transparent: transparency.transparent,
           scanSampled: transparency.sampled,
         })
@@ -221,7 +231,10 @@ async function handleFiles(files) {
     }
 
     if (token !== importToken) {
-      nextImages.forEach((item) => URL.revokeObjectURL(item.url))
+      nextImages.forEach((item) => {
+        if (item.url !== item.sourceUrl) URL.revokeObjectURL(item.url)
+        URL.revokeObjectURL(item.sourceUrl)
+      })
       return
     }
 
@@ -273,7 +286,8 @@ function deleteImageNow(id) {
     lastExport.value = null
   }
   showAddTile.value = true
-  revokeLater(removed.url)
+  if (removed.url !== removed.sourceUrl) revokeLater(removed.url)
+  revokeLater(removed.sourceUrl || removed.url)
 }
 
 async function requestRemoveImage(id) {
@@ -373,6 +387,66 @@ async function saveAndDelete() {
   } finally {
     isExporting.value = false
     isSavingDelete.value = false
+  }
+}
+
+async function applyFitMode(mode) {
+  if (isLocked.value || !activeImage.value) return
+
+  const current = activeImage.value
+  const index = images.value.findIndex((item) => item.id === current.id)
+  if (index < 0) return
+
+  isFitting.value = true
+  let fitted = null
+  let installed = false
+
+  try {
+    fitted = await createStandardizedImage(
+      current.sourceUrl || current.url,
+      mode,
+    )
+    if (activeId.value !== current.id) {
+      URL.revokeObjectURL(fitted.url)
+      return
+    }
+
+    const sourceUrl = current.sourceUrl || current.url
+    const nextImage = {
+      ...current,
+      url: fitted.url,
+      sourceUrl,
+      width: fitted.width,
+      height: fitted.height,
+      size: fitted.size,
+      mime: 'image/png',
+      transparent: false,
+      scanSampled: false,
+      fitMode: mode,
+      fitRevision: (current.fitRevision ?? 0) + 1,
+    }
+
+    if (current.url !== sourceUrl) revokeLater(current.url)
+    images.value.splice(index, 1, nextImage)
+    installed = true
+    cropMetrics.value = null
+    cropReady.value = false
+    lastExport.value = null
+
+    showToast({
+      title: t('toast.fitApplied'),
+      detail: t(`toast.fitMode.${mode}`),
+      tone: mode === 'stretch' ? 'warning' : 'success',
+    })
+  } catch (error) {
+    if (fitted?.url && !installed) URL.revokeObjectURL(fitted.url)
+    showToast({
+      title: t('toast.fitFailed'),
+      detail: error?.i18nKey ? t(error.i18nKey) : t('errors.fitFailed'),
+      tone: 'error',
+    })
+  } finally {
+    isFitting.value = false
   }
 }
 
@@ -480,7 +554,10 @@ watch(locale, () => {
 onBeforeUnmount(() => {
   importToken += 1
   window.clearTimeout(toastTimer)
-  images.value.forEach((item) => URL.revokeObjectURL(item.url))
+  images.value.forEach((item) => {
+    if (item.url !== item.sourceUrl) URL.revokeObjectURL(item.url)
+    URL.revokeObjectURL(item.sourceUrl || item.url)
+  })
 })
 </script>
 
@@ -730,6 +807,7 @@ onBeforeUnmount(() => {
         @crop-change="onCropChange"
         @crop-error="onCropError"
         @files-selected="handleFiles"
+        @fit-request="applyFitMode"
         @ready="onCropReady"
       />
     </main>

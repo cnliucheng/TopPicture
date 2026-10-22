@@ -55,6 +55,23 @@ async function dropFixtures(page, names) {
   }, payload)
 }
 
+async function sampleThumbnail(page) {
+  return page.evaluate(async () => {
+    const image = document.querySelector('.thumb-frame img')
+    await image.decode()
+    const canvas = document.createElement('canvas')
+    canvas.width = image.naturalWidth
+    canvas.height = image.naturalHeight
+    const context = canvas.getContext('2d')
+    context.drawImage(image, 0, 0)
+    return {
+      width: canvas.width,
+      height: canvas.height,
+      corner: [...context.getImageData(0, 0, 1, 1).data],
+    }
+  })
+}
+
 async function readDownload(download) {
   const downloadPath = await download.path()
   return fs.readFile(downloadPath)
@@ -529,54 +546,60 @@ test('saves a non-active image before deleting it', async ({ page }) => {
   await expect(page.locator('.thumb-add')).toBeVisible()
 })
 
-test('shows the image frame and scales the original proportionally', async ({
-  page,
-}) => {
-  await uploadFixture(page, 'app-screenshot.jpg')
+test('auto-fits a 16:9 screenshot using all three modes', async ({ page }) => {
+  await uploadFixture(page, 'wide-screenshot.jpg')
+  await expect(page.locator('.thumb-dims')).toHaveText('1,920 × 1,080')
 
-  await expect(page.locator('.image-frame')).toBeVisible()
-  await expect(page.locator('.image-frame')).not.toHaveClass(/is-active/)
+  await page.locator('.stage-fit-button').click()
+  await expect(page.locator('.fit-menu')).toBeVisible()
+  await expect(page.locator('.fit-option')).toHaveCount(3)
+  await expect(page.getByRole('menuitem', { name: /裁切填满/ })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: /完整留白/ })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: /拉伸填满/ })).toBeVisible()
 
-  await page.locator('.stage-mode-button').click()
-  await expect(page.locator('.stage-mode-button')).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  )
-  await expect(page.locator('.image-frame')).toHaveClass(/is-active/)
-  await expect(page.locator('.image-handle')).toHaveCount(8)
-  await expect(page.locator('cropper-selection')).toBeHidden()
+  await page.getByRole('menuitem', { name: /裁切填满/ }).click()
+  await expect(page.locator('.thumb-dims')).toHaveText('1,728 × 1,080')
+  await expect(page.locator('.toast')).toContainText('裁切填满 · 无变形')
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+  let sample = await sampleThumbnail(page)
+  expect(sample.width).toBe(1728)
+  expect(sample.height).toBe(1080)
+  expect(sample.corner.slice(0, 3)).not.toEqual([255, 255, 255])
 
-  const before = await page.evaluate(
-    () => document.querySelector('cropper-image').$getTransform()[0],
-  )
-  const handle = await page.locator('.image-handle--se').boundingBox()
-  expect(handle).not.toBeNull()
+  await page.locator('.stage-fit-button').click()
+  await page.getByRole('menuitem', { name: /完整留白/ }).click()
+  await expect(page.locator('.thumb-dims')).toHaveText('1,920 × 1,200')
+  await expect(page.locator('.toast')).toContainText('完整留白 · 保留全部内容')
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+  sample = await sampleThumbnail(page)
+  expect(sample.width).toBe(1920)
+  expect(sample.height).toBe(1200)
+  expect(sample.corner.slice(0, 3)).toEqual([255, 255, 255])
 
-  const startX = handle.x + handle.width / 2
-  const startY = handle.y + handle.height / 2
-  await page.mouse.move(startX, startY)
-  await page.mouse.down()
-  await page.mouse.move(startX + 70, startY + 52, { steps: 12 })
-  await page.mouse.up()
+  await page.locator('input[type=radio][value=png]').check()
+  const downloadPromise = page.waitForEvent('download')
+  await page.locator('.export-button').click()
+  const download = await downloadPromise
+  const exported = await readDownload(download)
+  const decoded = decode(exported)
+  expect(readPngHeader(exported)).toEqual({
+    width: 1440,
+    height: 900,
+    bitDepth: 8,
+    colorType: 2,
+  })
+  expect([...decoded.data.slice(0, 3)]).toEqual([255, 255, 255])
 
-  await expect
-    .poll(async () =>
-      page.evaluate(
-        () => document.querySelector('cropper-image').$getTransform()[0],
-      ),
-    )
-    .toBeGreaterThan(before)
-
-  await page.locator('.stage-mode-button').click()
-  await expect(page.locator('cropper-selection')).toBeVisible()
-  await expect
-    .poll(async () =>
-      page.evaluate(() => {
-        const selection = document.querySelector('cropper-selection')
-        return selection.width / selection.height
-      }),
-    )
-    .toBeCloseTo(1.6, 4)
+  await page.locator('.stage-fit-button').click()
+  await page.getByRole('menuitem', { name: /拉伸填满/ }).click()
+  await expect(page.locator('.thumb-dims')).toHaveText('1,920 × 1,200')
+  await expect(page.locator('.toast')).toContainText('拉伸填满 · 画面已变形')
+  await expect(page.locator('.crop-surface')).toHaveClass(/is-ready/)
+  sample = await sampleThumbnail(page)
+  expect(sample.width).toBe(1920)
+  expect(sample.height).toBe(1200)
+  expect(sample.corner.slice(0, 3)).not.toEqual([255, 255, 255])
+  await expect(page.locator('.toast')).toContainText('已应用一键适配')
 })
 
 test('switches between Chinese and English and persists the choice', async ({
@@ -625,19 +648,23 @@ test('switches between Chinese and English and persists the choice', async ({
   )
 })
 
-test('localizes the image scaling and delete controls', async ({ page }) => {
+test('localizes the auto-fit and delete controls', async ({ page }) => {
   await page.locator('[data-locale="en"]').click()
   await uploadFixture(page, 'app-screenshot.jpg')
 
+  await expect(page.getByRole('button', { name: 'Auto-fit' })).toBeVisible()
+  await page.getByRole('button', { name: 'Auto-fit' }).click()
   await expect(
-    page.getByRole('button', { name: 'Scale image' }),
+    page.getByRole('menuitem', { name: /Crop to fill/ }),
   ).toBeVisible()
-  await page.getByRole('button', { name: 'Scale image' }).click()
-  await expect(page.getByRole('button', { name: 'Done' })).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Scale image' }),
-  ).toHaveCount(0)
-  await page.getByRole('button', { name: 'Done' }).click()
+    page.getByRole('menuitem', { name: /Fit with white padding/ }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('menuitem', { name: /Stretch to fill/ }),
+  ).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.fit-menu')).toHaveCount(0)
 
   await page.locator('.thumb-remove').click()
   await expect(page.locator('#delete-title')).toHaveText(

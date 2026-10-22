@@ -4,6 +4,7 @@ import Cropper from 'cropperjs'
 import {
   PhArrowCounterClockwise as ArrowCounterClockwise,
   PhArrowsOutSimple as ArrowsOutSimple,
+  PhCaretDown as CaretDown,
   PhLockSimple as LockSimple,
   PhPlus as Plus,
   PhUploadSimple as UploadSimple,
@@ -39,6 +40,7 @@ const emit = defineEmits([
   'crop-change',
   'crop-error',
   'files-selected',
+  'fit-request',
   'ready',
 ])
 
@@ -48,6 +50,7 @@ const CROPPER_TEMPLATE = `
       rotatable="false"
       scalable
       translatable
+      min-fit="contain"
     ></cropper-image>
     <cropper-shade theme-color="rgba(7, 8, 6, 0.64)"></cropper-shade>
     <cropper-handle action="move" plain></cropper-handle>
@@ -86,27 +89,27 @@ const isReady = ref(false)
 const initError = ref('')
 const dragging = ref(false)
 const metrics = ref(null)
-const isTransforming = ref(false)
-const imageFrame = ref(null)
+const fitMenuOpen = ref(false)
+const fitMenuRef = ref(null)
 const canAdd = computed(
   () => !props.isBusy && props.imageCount < props.maxImages,
 )
 const isFull = computed(() => props.imageCount >= props.maxImages)
 const cropStates = new Map()
-const IMAGE_HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
-const MIN_IMAGE_SCALE_RATIO = 0.25
-const MAX_IMAGE_SCALE_RATIO = 6
-
-const imageFrameStyle = computed(() => {
-  const frame = imageFrame.value
-  if (!frame) return {}
-  return {
-    left: `${frame.left}px`,
-    top: `${frame.top}px`,
-    width: `${frame.width}px`,
-    height: `${frame.height}px`,
-  }
-})
+const FIT_OPTIONS = [
+  { value: 'cover', label: 'stage.fitCover', hint: 'stage.fitCoverHint' },
+  {
+    value: 'contain',
+    label: 'stage.fitContain',
+    hint: 'stage.fitContainHint',
+  },
+  {
+    value: 'stretch',
+    label: 'stage.fitStretch',
+    hint: 'stage.fitStretchHint',
+    warning: true,
+  },
+]
 
 let cropper = null
 let selection = null
@@ -119,9 +122,6 @@ let resizeTimer = 0
 let metricsTimer = 0
 let lastSurfaceSize = null
 let initToken = 0
-let baseImageScale = 1
-let imageScaleSession = null
-let frameRaf = 0
 
 function emitReady(value) {
   isReady.value = value
@@ -130,132 +130,6 @@ function emitReady(value) {
 
 function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()))
-}
-
-function updateImageFrame() {
-  if (!cropperImage || !canvas || !isReady.value) {
-    imageFrame.value = null
-    return
-  }
-
-  const canvasRect = canvas.getBoundingClientRect()
-  const imageRect = cropperImage.getBoundingClientRect()
-  if (!canvasRect.width || !canvasRect.height) return
-
-  imageFrame.value = {
-    left: imageRect.left - canvasRect.left,
-    top: imageRect.top - canvasRect.top,
-    width: imageRect.width,
-    height: imageRect.height,
-  }
-}
-
-function scheduleImageFrame() {
-  if (frameRaf) return
-  frameRaf = requestAnimationFrame(() => {
-    frameRaf = 0
-    updateImageFrame()
-  })
-}
-
-function clampImageScale(scale) {
-  return Math.min(
-    baseImageScale * MAX_IMAGE_SCALE_RATIO,
-    Math.max(baseImageScale * MIN_IMAGE_SCALE_RATIO, scale),
-  )
-}
-
-function enforceImageScaleLimits() {
-  if (!cropperImage) return
-  const matrix = cropperImage.$getTransform()
-  const nextScale = clampImageScale(Math.abs(matrix[0]) || 1)
-  if (Math.abs(nextScale - Math.abs(matrix[0])) > 0.0001) {
-    cropperImage.$setTransform(nextScale, 0, 0, nextScale, matrix[4], matrix[5])
-  }
-}
-
-function handleImageTransform() {
-  scheduleImageFrame()
-}
-
-function toggleImageTransform() {
-  if (!isReady.value) return
-  isTransforming.value = !isTransforming.value
-  if (!isTransforming.value) {
-    clampSelection()
-    updateMetrics()
-  }
-  scheduleImageFrame()
-}
-
-function startImageScale(event) {
-  if (!isTransforming.value || !cropperImage || !canvas) return
-  if (imageScaleSession) return
-
-  event.preventDefault()
-  event.stopPropagation()
-
-  const imageRect = cropperImage.getBoundingClientRect()
-  const center = {
-    x: imageRect.left + imageRect.width / 2,
-    y: imageRect.top + imageRect.height / 2,
-  }
-  const dx = event.clientX - center.x
-  const dy = event.clientY - center.y
-  const radius = Math.hypot(dx, dy)
-  if (radius < 8) return
-
-  imageScaleSession = {
-    center,
-    direction: { x: dx / radius, y: dy / radius },
-    radius,
-    startScale: Math.abs(cropperImage.$getTransform()[0]) || 1,
-    matrix: cropperImage.$getTransform(),
-  }
-
-  window.addEventListener('pointermove', handleImageScaleMove)
-  window.addEventListener('pointerup', endImageScale, { once: true })
-  window.addEventListener('pointercancel', endImageScale, { once: true })
-}
-
-function handleImageScaleMove(event) {
-  const session = imageScaleSession
-  if (!session || !cropperImage) return
-
-  event.preventDefault()
-  const dx = event.clientX - session.center.x
-  const dy = event.clientY - session.center.y
-  const radius = Math.max(
-    8,
-    dx * session.direction.x + dy * session.direction.y,
-  )
-  const factor = radius / session.radius
-  const nextScale = clampImageScale(session.startScale * factor)
-
-  cropperImage.$setTransform(
-    nextScale,
-    0,
-    0,
-    nextScale,
-    session.matrix[4],
-    session.matrix[5],
-  )
-  updateImageFrame()
-}
-
-function stopImageScale() {
-  window.removeEventListener('pointermove', handleImageScaleMove)
-  window.removeEventListener('pointerup', endImageScale)
-  window.removeEventListener('pointercancel', endImageScale)
-  imageScaleSession = null
-}
-
-function endImageScale() {
-  if (!imageScaleSession) return
-  stopImageScale()
-  clampSelection()
-  updateMetrics()
-  updateImageFrame()
 }
 
 function waitForImage(image) {
@@ -341,12 +215,11 @@ function getImageBounds() {
   return { left, top, width, height }
 }
 
-function setInitialSelection() {
+function setInitialSelection(coverage = 0.9) {
   if (!selection) return
   const bounds = getImageBounds()
   if (!bounds) return
 
-  const coverage = 0.9
   let width = bounds.width * coverage
   let height = width / CROP_RATIO
 
@@ -419,10 +292,8 @@ function scheduleClamp() {
 function scheduleMetrics() {
   window.clearTimeout(metricsTimer)
   metricsTimer = window.setTimeout(() => {
-    enforceImageScaleLimits()
     clampSelection()
     updateMetrics()
-    updateImageFrame()
   }, 90)
 }
 
@@ -437,34 +308,26 @@ function handleWheel() {
 function handleActionEnd() {
   clampSelection()
   updateMetrics()
-  updateImageFrame()
 }
 
 function bindEvents() {
   selection?.addEventListener('change', handleSelectionChange)
   canvas?.addEventListener('wheel', handleWheel, { passive: true })
   canvas?.addEventListener('actionend', handleActionEnd)
-  cropperImage?.addEventListener('transform', handleImageTransform)
 }
 
 function unbindEvents() {
   selection?.removeEventListener('change', handleSelectionChange)
   canvas?.removeEventListener('wheel', handleWheel)
   canvas?.removeEventListener('actionend', handleActionEnd)
-  cropperImage?.removeEventListener('transform', handleImageTransform)
 }
 
 function cleanupCropper() {
-  stopImageScale()
   unbindEvents()
   resizeObserver?.disconnect()
   resizeObserver = null
   window.clearTimeout(resizeTimer)
   window.clearTimeout(metricsTimer)
-  if (frameRaf) {
-    cancelAnimationFrame(frameRaf)
-    frameRaf = 0
-  }
 
   if (cropper) {
     cropper.destroy()
@@ -475,9 +338,6 @@ function cleanupCropper() {
   canvas = null
   cropperImage = null
   metrics.value = null
-  imageFrame.value = null
-  isTransforming.value = false
-  baseImageScale = 1
   lastSurfaceSize = null
   dragDepth = 0
   dragging.value = false
@@ -489,7 +349,6 @@ function observeResize() {
   resizeObserver = new ResizeObserver((entries) => {
     const box = entries[0]?.contentRect
     if (!box) return
-    scheduleImageFrame()
 
     if (!lastSurfaceSize) {
       lastSurfaceSize = { width: box.width, height: box.height }
@@ -509,31 +368,38 @@ function observeResize() {
       cropStates.clear()
       cropperImage.$center('contain')
       await nextFrame()
-      baseImageScale = Math.abs(cropperImage.$getTransform()[0]) || 1
       setInitialSelection()
       updateMetrics()
-      updateImageFrame()
     }, 160)
   })
   resizeObserver.observe(hostEl.value)
 }
 
-async function initCropper() {
+async function initCropper(token, fullSelection = false) {
+  if (token !== initToken) return
   if (!props.image || !hostEl.value || !sourceImage.value) return
   initError.value = ''
+  const imageId = props.image.id
 
   try {
     await waitForImage(sourceImage.value)
+    if (token !== initToken || props.image?.id !== imageId) return
     await nextTick()
+    if (token !== initToken || props.image?.id !== imageId) return
 
     const host = hostEl.value
     if (!host) return
 
-    cropper = new Cropper(sourceImage.value, {
+    const instance = new Cropper(sourceImage.value, {
       container: host,
       template: CROPPER_TEMPLATE,
     })
+    if (token !== initToken) {
+      instance.destroy()
+      return
+    }
 
+    cropper = instance
     canvas = cropper.getCropperCanvas()
     cropperImage = cropper.getCropperImage()
     selection = cropper.getCropperSelection()
@@ -545,16 +411,19 @@ async function initCropper() {
     selection.aspectRatio = CROP_RATIO
     cropperImage.$center('contain')
     await nextFrame()
+    if (token !== initToken) return
     await nextFrame()
-    baseImageScale = Math.abs(cropperImage.$getTransform()[0]) || 1
+    if (token !== initToken) return
 
-    if (!restoreCropState()) setInitialSelection()
+    if (fullSelection || !restoreCropState()) {
+      setInitialSelection(fullSelection ? 1 : 0.9)
+    }
     bindEvents()
     observeResize()
     updateMetrics()
-    updateImageFrame()
     emitReady(true)
   } catch {
+    if (token !== initToken) return
     cleanupCropper()
     initError.value = 'stage.initFailed'
     emit('crop-error', { key: initError.value })
@@ -570,13 +439,10 @@ async function retryCrop() {
 
 async function resetCrop() {
   if (!cropperImage || !isReady.value) return
-  stopImageScale()
   cropperImage.$center('contain')
   await nextFrame()
-  baseImageScale = Math.abs(cropperImage.$getTransform()[0]) || 1
   setInitialSelection()
   updateMetrics()
-  updateImageFrame()
 }
 
 async function renderExport() {
@@ -619,6 +485,41 @@ async function renderExport() {
   return exact
 }
 
+function closeFitMenu() {
+  fitMenuOpen.value = false
+}
+
+function toggleFitMenu() {
+  if (props.isBusy || !isReady.value) return
+  fitMenuOpen.value = !fitMenuOpen.value
+}
+
+function selectFitMode(mode) {
+  closeFitMenu()
+  emit('fit-request', mode)
+}
+
+function onFitMenuPointerDown(event) {
+  if (!fitMenuRef.value?.contains(event.target)) closeFitMenu()
+}
+
+function onFitMenuKeyDown(event) {
+  if (event.key === 'Escape') closeFitMenu()
+}
+
+watch(fitMenuOpen, (open) => {
+  if (open) {
+    document.addEventListener('pointerdown', onFitMenuPointerDown, true)
+    document.addEventListener('keydown', onFitMenuKeyDown)
+    nextTick(() => {
+      fitMenuRef.value?.querySelector('.fit-option')?.focus()
+    })
+  } else {
+    document.removeEventListener('pointerdown', onFitMenuPointerDown, true)
+    document.removeEventListener('keydown', onFitMenuKeyDown)
+  }
+})
+
 function openFilePicker() {
   if (!canAdd.value) return
   fileInput.value?.click()
@@ -654,19 +555,30 @@ function onDrop(event) {
 watch(
   () => props.image,
   async (nextImage, previousImage) => {
+    const isFitUpdate =
+      Boolean(nextImage) &&
+      Boolean(previousImage) &&
+      nextImage.id === previousImage.id &&
+      (nextImage.fitRevision ?? 0) !== (previousImage.fitRevision ?? 0)
+
     if (previousImage) captureCropState(previousImage.id)
+    if (isFitUpdate) cropStates.delete(nextImage.id)
+    closeFitMenu()
     const token = ++initToken
     cleanupCropper()
     initError.value = ''
     if (!nextImage) return
     await nextTick()
-    await initCropper(token)
+    await initCropper(token, isFitUpdate)
   },
   { flush: 'post' },
 )
 
 onBeforeUnmount(() => {
   initToken += 1
+  document.removeEventListener('pointerdown', onFitMenuPointerDown, true)
+  document.removeEventListener('keydown', onFitMenuKeyDown)
+  closeFitMenu()
   cleanupCropper()
 })
 
@@ -693,9 +605,7 @@ defineExpose({ renderExport, resetCrop })
       </div>
 
       <div class="stage-actions">
-        <span class="stage-hint">
-          {{ isTransforming ? t('stage.transformHint') : t('stage.hint') }}
-        </span>
+        <span class="stage-hint">{{ t('stage.hint') }}</span>
         <button
           v-if="image"
           class="stage-add-button"
@@ -709,20 +619,45 @@ defineExpose({ renderExport, resetCrop })
           <span>{{ isFull ? t('stage.limitReached') : t('stage.addImages') }}</span>
           <span class="stage-add-count">{{ imageCount }}/{{ maxImages }}</span>
         </button>
-        <button
-          v-if="image"
-          class="stage-mode-button"
-          :class="{ 'is-active': isTransforming }"
-          type="button"
-          :disabled="!isReady"
-          :aria-pressed="isTransforming"
-          :aria-label="isTransforming ? t('stage.scaleDone') : t('stage.scaleImage')"
-          :title="isTransforming ? t('stage.scaleDone') : t('stage.scaleImage')"
-          @click="toggleImageTransform"
-        >
-          <ArrowsOutSimple :size="13" weight="bold" aria-hidden="true" />
-          <span>{{ isTransforming ? t('stage.scaleDone') : t('stage.scaleImage') }}</span>
-        </button>
+        <div v-if="image" ref="fitMenuRef" class="fit-control">
+          <button
+            class="stage-fit-button"
+            :class="{ 'is-open': fitMenuOpen }"
+            type="button"
+            :disabled="!isReady || isBusy"
+            :aria-expanded="fitMenuOpen"
+            aria-haspopup="menu"
+            :aria-label="t('stage.autoFit')"
+            :title="t('stage.autoFit')"
+            @click="toggleFitMenu"
+          >
+            <ArrowsOutSimple :size="13" weight="bold" aria-hidden="true" />
+            <span class="stage-fit-label">{{ t('stage.autoFit') }}</span>
+            <CaretDown :size="10" weight="bold" aria-hidden="true" />
+          </button>
+
+          <Transition name="fit-menu">
+            <div
+              v-if="fitMenuOpen"
+              class="fit-menu"
+              role="menu"
+              :aria-label="t('stage.autoFit')"
+            >
+              <button
+                v-for="option in FIT_OPTIONS"
+                :key="option.value"
+                class="fit-option"
+                :class="{ 'is-warning': option.warning }"
+                type="button"
+                role="menuitem"
+                @click="selectFitMode(option.value)"
+              >
+                <span class="fit-option-title">{{ t(option.label) }}</span>
+                <span class="fit-option-hint">{{ t(option.hint) }}</span>
+              </button>
+            </div>
+          </Transition>
+        </div>
         <span class="ratio-badge">
           <LockSimple :size="13" weight="bold" aria-hidden="true" />
           16:10
@@ -744,11 +679,7 @@ defineExpose({ renderExport, resetCrop })
     <div class="crop-shell">
       <div
         class="crop-surface"
-        :class="{
-          'is-dragging': dragging,
-          'is-ready': isReady,
-          'is-transforming': isTransforming,
-        }"
+        :class="{ 'is-dragging': dragging, 'is-ready': isReady }"
         @dragenter.prevent="onDragEnter"
         @dragover.prevent
         @dragleave.prevent="onDragLeave"
@@ -783,24 +714,6 @@ defineExpose({ renderExport, resetCrop })
             :src="image.url"
             :alt="t('stage.alt')"
           />
-        </div>
-
-        <div
-          v-if="image && isReady && imageFrame"
-          class="image-frame"
-          :class="{ 'is-active': isTransforming }"
-          :style="imageFrameStyle"
-          aria-hidden="true"
-        >
-          <template v-if="isTransforming">
-            <span
-              v-for="handle in IMAGE_HANDLES"
-              :key="handle"
-              class="image-handle"
-              :class="`image-handle--${handle}`"
-              @pointerdown.stop.prevent="startImageScale"
-            ></span>
-          </template>
         </div>
 
         <div v-if="image && !isReady" class="stage-loading" role="status">
@@ -858,7 +771,7 @@ defineExpose({ renderExport, resetCrop })
   flex-direction: column;
   gap: 16px;
   padding: 18px;
-  overflow: hidden;
+  overflow: visible;
   color: var(--paper);
   background:
     radial-gradient(circle at 76% 14%, rgba(255, 255, 255, 0.06), transparent 30%),
@@ -871,6 +784,8 @@ defineExpose({ renderExport, resetCrop })
 }
 
 .stage-head {
+  position: relative;
+  z-index: 6;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -955,7 +870,11 @@ defineExpose({ renderExport, resetCrop })
   letter-spacing: 0.02em;
 }
 
-.stage-mode-button {
+.fit-control {
+  position: relative;
+}
+
+.stage-fit-button {
   display: inline-flex;
   height: 28px;
   align-items: center;
@@ -975,21 +894,81 @@ defineExpose({ renderExport, resetCrop })
     border-color 160ms ease;
 }
 
-.stage-mode-button:hover:not(:disabled) {
+.stage-fit-button:hover:not(:disabled),
+.stage-fit-button.is-open {
   color: var(--paper);
   background: rgba(255, 255, 255, 0.09);
   border-color: rgba(255, 255, 255, 0.24);
 }
 
-.stage-mode-button.is-active {
-  color: #ff8a6a;
-  background: rgba(255, 90, 47, 0.12);
-  border-color: rgba(255, 90, 47, 0.48);
-}
-
-.stage-mode-button:disabled {
+.stage-fit-button:disabled {
   cursor: not-allowed;
   opacity: 0.38;
+}
+
+.fit-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(270px, calc(100vw - 48px));
+  padding: 6px;
+  background: #23241f;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 11px;
+  box-shadow: 0 18px 40px -14px rgba(0, 0, 0, 0.65);
+}
+
+.fit-option {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  color: var(--paper);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  transition: background 140ms ease;
+}
+
+.fit-option:hover,
+.fit-option:focus-visible {
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.fit-option-title {
+  font-size: 10px;
+  font-weight: 620;
+  letter-spacing: 0.01em;
+}
+
+.fit-option-hint {
+  color: rgba(245, 243, 235, 0.5);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.fit-option.is-warning .fit-option-title {
+  color: #ff9a7d;
+}
+
+.fit-option.is-warning .fit-option-hint {
+  color: rgba(255, 154, 125, 0.62);
+}
+
+.fit-menu-enter-active,
+.fit-menu-leave-active {
+  transition:
+    opacity 140ms ease,
+    transform 160ms var(--ease-out);
+}
+
+.fit-menu-enter-from,
+.fit-menu-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
 }
 
 .ratio-badge {
@@ -1151,100 +1130,6 @@ defineExpose({ renderExport, resetCrop })
   font-family: var(--font-mono);
   font-size: 8px;
   letter-spacing: 0.035em;
-}
-
-.image-frame {
-  position: absolute;
-  z-index: 3;
-  border: 1px solid rgba(245, 243, 235, 0.22);
-  border-radius: 2px;
-  pointer-events: none;
-  transition: border-color 160ms ease;
-}
-
-.image-frame.is-active {
-  border-color: rgba(255, 90, 47, 0.92);
-  box-shadow: inset 0 0 0 1px rgba(255, 90, 47, 0.16);
-}
-
-.image-handle {
-  position: absolute;
-  width: 13px;
-  height: 13px;
-  pointer-events: auto;
-  touch-action: none;
-  background: var(--stage);
-  border: 2px solid var(--accent);
-  border-radius: 50%;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.42);
-  transition:
-    background 140ms ease,
-    transform 140ms ease;
-}
-
-.image-handle:hover {
-  background: var(--accent);
-}
-
-.image-handle--nw {
-  top: 8px;
-  left: 8px;
-  cursor: nwse-resize;
-  transform: translate(-50%, -50%);
-}
-
-.image-handle--n {
-  top: 8px;
-  left: 50%;
-  cursor: ns-resize;
-  transform: translate(-50%, -50%);
-}
-
-.image-handle--ne {
-  top: 8px;
-  right: 8px;
-  cursor: nesw-resize;
-  transform: translate(50%, -50%);
-}
-
-.image-handle--e {
-  top: 50%;
-  right: 8px;
-  cursor: ew-resize;
-  transform: translate(50%, -50%);
-}
-
-.image-handle--se {
-  right: 8px;
-  bottom: 8px;
-  cursor: nwse-resize;
-  transform: translate(50%, 50%);
-}
-
-.image-handle--s {
-  bottom: 8px;
-  left: 50%;
-  cursor: ns-resize;
-  transform: translate(-50%, 50%);
-}
-
-.image-handle--sw {
-  bottom: 8px;
-  left: 8px;
-  cursor: nesw-resize;
-  transform: translate(-50%, 50%);
-}
-
-.image-handle--w {
-  top: 50%;
-  left: 8px;
-  cursor: ew-resize;
-  transform: translate(-50%, -50%);
-}
-
-.crop-surface.is-transforming :deep(cropper-selection),
-.crop-surface.is-transforming :deep(cropper-shade) {
-  visibility: hidden;
 }
 
 .corner-mark {
@@ -1546,21 +1431,47 @@ defineExpose({ renderExport, resetCrop })
   }
 }
 
+@media (max-width: 360px) {
+  .fit-menu {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
+
+  .fit-menu-enter-from,
+  .fit-menu-leave-to {
+    transform: translate(-50%, -4px) scale(0.98);
+  }
+}
+
 @media (max-width: 560px) {
   .stage-eyebrow {
     display: none;
   }
 
-  .stage-add-button,
-  .stage-mode-button {
+  .stage-add-button {
     width: 28px;
     justify-content: center;
     padding: 0;
   }
 
-  .stage-add-button > span,
-  .stage-mode-button > span {
+  .stage-add-button > span {
     display: none;
+  }
+
+  .stage-fit-button {
+    width: 38px;
+    justify-content: center;
+    gap: 3px;
+    padding: 0 6px;
+  }
+
+  .stage-fit-label {
+    display: none;
+  }
+
+  .fit-menu {
+    right: -54px;
   }
 
   .stage-heading h2 {
@@ -1597,13 +1508,17 @@ defineExpose({ renderExport, resetCrop })
 @media (prefers-reduced-motion: reduce) {
   .stage-icon-button,
   .stage-add-button,
-  .stage-mode-button,
+  .stage-fit-button,
+  .fit-option,
   .stage-empty,
   .stage-empty::before,
   .empty-icon,
-  .image-frame,
-  .image-handle,
   .crop-surface {
+    transition: none;
+  }
+
+  .fit-menu-enter-active,
+  .fit-menu-leave-active {
     transition: none;
   }
 
