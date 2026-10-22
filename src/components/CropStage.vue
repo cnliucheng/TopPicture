@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Cropper from 'cropperjs'
 import {
   PhArrowCounterClockwise as ArrowCounterClockwise,
+  PhFrameCorners as FrameCorners,
   PhLockSimple as LockSimple,
   PhUploadSimple as UploadSimple,
 } from '@phosphor-icons/vue'
@@ -24,7 +25,6 @@ const emit = defineEmits([
   'crop-change',
   'crop-error',
   'file-drop',
-  'pick-request',
   'ready',
 ])
 
@@ -408,10 +408,6 @@ function onDrop(event) {
   if (file) emit('file-drop', file)
 }
 
-function requestFilePicker() {
-  emit('pick-request')
-}
-
 watch(
   () => props.image?.url,
   async (url) => {
@@ -468,29 +464,18 @@ defineExpose({ renderExport, resetCrop })
         @dragleave.prevent="onDragLeave"
         @drop.prevent="onDrop"
       >
-        <button
-          v-if="!image"
-          class="stage-empty"
-          type="button"
-          @click="requestFilePicker"
-        >
+        <div v-if="!image" class="stage-empty">
           <span class="corner-mark corner-mark--tl" aria-hidden="true"></span>
           <span class="corner-mark corner-mark--tr" aria-hidden="true"></span>
           <span class="corner-mark corner-mark--bl" aria-hidden="true"></span>
           <span class="corner-mark corner-mark--br" aria-hidden="true"></span>
 
           <span class="empty-icon">
-            <UploadSimple :size="26" weight="light" aria-hidden="true" />
+            <FrameCorners :size="26" weight="light" aria-hidden="true" />
           </span>
-          <span class="empty-title">把截图放到这里</span>
-          <span class="empty-copy">
-            或点击选择文件
-            <span class="empty-divider" aria-hidden="true"></span>
-            JPEG / PNG
-            <span class="empty-divider" aria-hidden="true"></span>
-            最大 5 MB
-          </span>
-        </button>
+          <span class="empty-title">画布已准备就绪</span>
+          <span class="empty-copy">从左侧导入截图后，在这里调整构图</span>
+        </div>
 
         <div v-else ref="hostEl" class="cropper-host">
           <img
@@ -714,11 +699,6 @@ defineExpose({ renderExport, resetCrop })
   content: '';
   border: 1px dashed rgba(245, 243, 235, 0.17);
   border-radius: 5px;
-  transition: border-color 180ms ease;
-}
-
-.stage-empty:hover::before {
-  border-color: rgba(255, 90, 47, 0.55);
 }
 
 .empty-icon {
@@ -731,16 +711,6 @@ defineExpose({ renderExport, resetCrop })
   background: rgba(255, 255, 255, 0.055);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 50%;
-  transition:
-    color 180ms ease,
-    border-color 180ms ease,
-    transform 180ms ease;
-}
-
-.stage-empty:hover .empty-icon {
-  color: var(--accent);
-  border-color: rgba(255, 90, 47, 0.42);
-  transform: translateY(-2px);
 }
 
 .empty-title {
@@ -750,19 +720,11 @@ defineExpose({ renderExport, resetCrop })
 }
 
 .empty-copy {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
+  max-width: 34ch;
   color: rgba(245, 243, 235, 0.64);
-  font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.03em;
-}
-
-.empty-divider {
-  width: 1px;
-  height: 10px;
-  background: rgba(245, 243, 235, 0.16);
+  line-height: 1.55;
+  letter-spacing: 0.01em;
 }
 
 .corner-mark {
@@ -1093,7 +1055,6 @@ defineExpose({ renderExport, resetCrop })
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .stage-empty .empty-icon,
   .stage-icon-button,
   .crop-surface {
     transition: none;

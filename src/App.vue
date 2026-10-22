@@ -6,6 +6,7 @@ import {
   PhCheck as Check,
   PhCheckCircle as CheckCircle,
   PhDownloadSimple as DownloadSimple,
+  PhGithubLogo as GithubLogo,
   PhInfo as Info,
   PhLockSimple as LockSimple,
   PhUploadSimple as UploadSimple,
@@ -304,6 +305,17 @@ onBeforeUnmount(() => {
           <LockSimple :size="13" weight="bold" aria-hidden="true" />
           <span>纯本地处理</span>
         </span>
+        <a
+          class="repo-button"
+          href="https://github.com/cnliucheng/TopPicture"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="在 GitHub 查看 Framecheck 源码"
+          title="在 GitHub 查看源码"
+        >
+          <GithubLogo :size="14" weight="bold" aria-hidden="true" />
+          <span>GitHub</span>
+        </a>
         <button class="spec-button" type="button" @click="specRef?.open()">
           <Info :size="14" weight="bold" aria-hidden="true" />
           <span>Apple 规范</span>
@@ -320,8 +332,7 @@ onBeforeUnmount(() => {
             Screenshot compliance
           </p>
           <h1 id="page-title">
-            截图，<br />
-            <span>一次过审</span><em>.</em>
+            截图，<span>一次过审</span><em>.</em>
           </h1>
           <p class="lede">
             锁定 16:10 比例，自动压平透明通道。导出即可提交的 Mac App Store 截图。
@@ -543,7 +554,6 @@ onBeforeUnmount(() => {
         @crop-change="onCropChange"
         @crop-error="onCropError"
         @file-drop="handleFile"
-        @pick-request="openFilePicker"
         @ready="onCropReady"
       />
     </main>
@@ -666,13 +676,14 @@ onBeforeUnmount(() => {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 20px;
+  gap: 10px;
 }
 
 .local-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  margin-right: 6px;
   color: var(--ink-soft);
   font-family: var(--font-mono);
   font-size: 9px;
@@ -684,6 +695,7 @@ onBeforeUnmount(() => {
   color: #487a61;
 }
 
+.repo-button,
 .spec-button {
   display: inline-flex;
   height: 32px;
@@ -693,6 +705,7 @@ onBeforeUnmount(() => {
   color: var(--ink);
   font-size: 10px;
   font-weight: 600;
+  text-decoration: none;
   background: transparent;
   border: 1px solid var(--line-strong);
   border-radius: 999px;
@@ -701,6 +714,7 @@ onBeforeUnmount(() => {
     border-color 160ms ease;
 }
 
+.repo-button:hover,
 .spec-button:hover {
   background: rgba(255, 255, 255, 0.54);
   border-color: var(--ink-soft);
@@ -750,10 +764,11 @@ onBeforeUnmount(() => {
 .intro h1 {
   margin: 0;
   color: var(--ink);
-  font-size: clamp(36px, 3.2vw, 44px);
+  font-size: clamp(30px, 2.9vw, 40px);
   font-weight: 610;
   letter-spacing: -0.065em;
-  line-height: 1.04;
+  line-height: 1.08;
+  white-space: nowrap;
 }
 
 .intro h1 span {
@@ -1551,6 +1566,7 @@ onBeforeUnmount(() => {
     display: none;
   }
 
+  .repo-button,
   .spec-button {
     height: 30px;
     padding: 0 9px;
@@ -1579,10 +1595,12 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 400px) {
+  .repo-button span,
   .spec-button span:nth-child(2) {
     display: none;
   }
 
+  .repo-button,
   .spec-button {
     width: 32px;
     justify-content: center;

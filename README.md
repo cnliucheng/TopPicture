@@ -4,6 +4,8 @@
 
 ![Framecheck 界面](docs/preview.png)
 
+**GitHub 仓库**：[cnliucheng/TopPicture](https://github.com/cnliucheng/TopPicture)
+
 ## 为什么需要它
 
 Mac App Store 对截图有硬性限制：
